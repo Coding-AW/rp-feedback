@@ -1,0 +1,44 @@
+# =============================================================================
+#  Line endings, and what git should treat as text
+# =============================================================================
+#  Windows ends a line with two characters, Linux with one. This project lives
+#  on both - you edit on Windows, the board runs Linux - and without a rule here
+#  git will eventually show a file as entirely rewritten when nothing changed
+#  but the invisible characters at the ends of the lines.
+#
+#  `text=auto` stores everything with Linux endings inside the repository and
+#  gives you Windows ones in your working folder. Nobody has to think about it.
+# =============================================================================
+
+* text=auto
+
+# --- Files that run on the board: always Linux endings -----------------------
+#  These get copied to the Red Pitaya. Python tolerates either, but there is no
+#  reason to send it something it has to tolerate.
+*.py    text eol=lf
+*.sh    text eol=lf
+
+# --- Vivado's own files: leave them exactly as Vivado writes them ------------
+#  Tcl and XDC are text, but the .xpr and .bd are machine-written and there is
+#  nothing to gain from normalising them.
+*.tcl   text
+*.xdc   text
+*.v     text
+*.sv    text
+*.vh    text
+
+# --- Binary: never try to merge or diff these as text ------------------------
+*.bit   binary
+*.bin   binary
+*.png   binary
+*.pdf   binary
+*.zip   binary
+*.dcp   binary
+
+# --- Notebooks ---------------------------------------------------------------
+#  Notebooks are JSON, so git CAN diff them, but the diffs are unreadable. The
+#  ones in this project are kept free of stored outputs, which keeps them small
+#  and the diffs meaningful. If one ever fills up with output, clear it before
+#  committing:
+#      jupyter nbconvert --clear-output --inplace "Test Stage 5*.ipynb"
+*.ipynb text

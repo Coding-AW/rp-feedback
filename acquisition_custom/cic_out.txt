@@ -1,0 +1,42 @@
+====================================================================
+ Bit-accurate check of red_pitaya_acq_cic.v
+====================================================================
+
+1. DC GAIN (checks the output window is in the right place)
+   R =    64:  output 3160320  expected 3160320   ok
+   R =   128:  output 3160320  expected 3160320   ok
+   R =   256:  output 3160320  expected 3160320   ok
+   R =   512:  output 3160320  expected 3160320   ok
+   R =  1024:  output 3160320  expected 3160320   ok
+   R =  2048:  output 3160320  expected 3160320   ok
+   R =  4096:  output 3160320  expected 3160320   ok
+   PASS
+
+2. INTEGRATOR WRAPAROUND (the overflow that is not a bug)
+   R =    64:  256 decimated samples,  identical to unlimited-precision reference: True
+   R =   512:  32 decimated samples,  identical to unlimited-precision reference: True
+   R =  4096:  4 decimated samples,  identical to unlimited-precision reference: True
+   (running total reached 30 bits; accumulators are 72 bits, and stage 4 grows far faster)
+   PASS
+
+3. FREQUENCY RESPONSE
+   decimation R = 1024  ->  output rate 122.07 kSPS, measurement window +-61.04 kHz
+   passband droop at +-30.52 kHz : -3.65 dB  (this is what the FIR filter corrects)
+   worst alias reaching the passband      : -41.8 dB
+
+   For reference, the same numbers for other stage counts:
+     stages   droop(dB)   alias(dB)
+       2         -1.82      -20.9
+       3         -2.74      -31.4
+       4         -3.65      -41.8  <- NSTAGE
+       5         -4.56      -52.3
+
+   More stages reject aliases harder but droop more. Four stages
+   put the aliases well below the noise floor while leaving a droop
+   small enough for the correction filter to flatten.
+Traceback (most recent call last):
+  File "/sessions/wizardly-serene-bohr/mnt/Test_Project/acquisition_custom/validate_cic.py", line 235, in <module>
+    test_response()
+  File "/sessions/wizardly-serene-bohr/mnt/Test_Project/acquisition_custom/validate_cic.py", line 201, in test_response
+    assert 20 * np.log10(worst) < -60, "alias rejection is too weak - raise NSTAGE"
+AssertionError: alias rejection is too weak - raise NSTAGE
