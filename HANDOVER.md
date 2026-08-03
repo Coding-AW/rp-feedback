@@ -39,10 +39,16 @@ correction from Linux (`Bus error`). axi0's port is configured correctly and run
 whole of Stage 6 clean. **Use axi0. axi1 is diagnostics-only** — documented in the
 register map, defaulted in the notebook, and `check_system.py` warns if axi1 is armed.
 
-**Pending rebuild (in source, NOT yet built): the resonator's noise sources**
-(`NOISE_TANK`/`NOISE_OUT` registers, needed by Test Stage 9 — its Step 0 probes for
-them and refuses an older bitstream). The earlier pending items — trusted badge, axi0
-default, the resonator itself — went into the Stage 8 rebuild and are live.
+**Nothing is pending a rebuild.** All source changes through the noise sources are
+built and proven on hardware; Stages 1–10 pass.
+
+**Where the project stands (2026-07-31):** every emulatable result in the Herkenhoff
+paper is reproduced with known answers — sweeps, Q control, decoupling, effective
+temperature (Eq. 8), the servo, the SEO, and the full gain × phase atlas with its
+designer (`Test Stage 10`). Next, in order: (1) the **real coil** — cable it, set
+`EMULATION = False` in Stage 10, rerun; (2) the **parameter sequencer** — design ready
+for review in `SEQUENCER_PLAN.md`, justified by Stage 9's measured 45 ms software
+control interval; it unlocks pulse-and-phase measurement schemes.
 
 **After any rebuild:** check the timing report (the resonator's multiply-add must close
 in one clock), and re-measure the feedback loop delay to confirm 119.87 ns is unchanged.

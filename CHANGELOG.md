@@ -14,6 +14,101 @@ ion manipulation techniques in Penning traps*, Rev. Sci. Instrum. **92**, 103201
 
 ---
 
+## 2026-07-31 — Stage 10 first scan: one wild fit poisoned three verdicts. The sweep is now adaptive
+
+The atlas's first run *proved the resonator works* — K agreed across branches to 2%,
+two of three reproducibility points landed within 7% — while STEP 3 failed. The cause
+was a single grid point whose fitted Q read **2×10²²**: near the narrowing phase the
+feedback squeezes the line ~40×, to 5.6 kHz, and the fixed sweep grid (points 111 kHz
+apart, each *listening* only ±16 kHz) could neither sample nor even *hear* it. The fit
+of the resulting featureless data diverged, was stored ungated, and one number then
+flattened the Q colour scale, dominated the Eq. 8 regression (slope 0.000, scatter 98%
+— outlier arithmetic, not physics), and printed a fake "+100%" reproducibility failure.
+Three symptoms, one cause: *a resolution coarser than the thing measured, with no gate
+between a bad fit and the data it feeds*.
+
+### The fix, iterated three times in simulation before touching the notebook
+
+1. First attempt (gate on implausibly narrow fits) — simulation rejected it: an
+   under-resolved line also produces implausibly *wide* fits that pass such a gate.
+2. Second attempt (zoom ladder) — simulation exposed the deeper truth: the line hides
+   *between the receiver's listening windows*, so no grid refinement alone can find it,
+   and a low-contrast gate misreads *broad* lines as absent.
+3. Final form, validated 300/300 in all four regimes (40× and 10× narrowed, open loop,
+   2.4× broadened; width bias 0.4–2%, centres to tens of Hz):
+   - **match the receiver to the grid** — decimation chosen per pass so the listening
+     window is ~half the point spacing, rounded *wider*: nothing can hide in a gap;
+   - read the data before trusting any fit — low contrast ⇒ widen the span; one point
+     owning the power ⇒ zoom on it; then fit with centre/width/residual gates;
+   - **deconvolve the known window** from the accepted width by bisecting the exact
+     forward model — no calibration constants;
+   - unresolved after five passes ⇒ nans, counted and reported, never stored.
+
+Downstream hardening from the same lesson: the Eq. 8 slope is now a *median* of ratios
+(a wild point moves a median by one rank, not twenty decades), the temperature map got
+a log scale, reproducibility compares on a log scale, the analytic Lorentzian area
+replaced span-dependent numerical integration, and the designer refuses to report an
+unresolved point. Scan cost: ~20% longer, paid only by the narrowed minority of points.
+
+---
+
+## 2026-07-31 — Stage 9 passes in full. Gap analysis against the paper; Stage 10 built; Stage 11 planned
+
+With Stage 9 passing, the project was audited feature-by-feature against Herkenhoff
+*et al.* **Reproduced and proven:** the IQ phase shifter (their Eq. 10), the built-in
+acquisition, Q modification (Eqs. 5/7), decoupling by detuning (Eq. 9), and the
+software control loop (our measured 45 ms interval vs their reported ~80 ms). **Never
+tested until now:** the effective-temperature law (their Eq. 8). **Not implemented:**
+the parameter sequencer (their timed/triggered 8-set stepping — the enabler of
+pulse-and-phase schemes), the second feedback channel with cancellation, and the SEO.
+
+### New: `Test Stage 10 - Feedback Atlas and Operating Point Designer.ipynb`
+
+The paper's Fig. 8 experiment: a gain × phase scan (default 14 × 24, ~7 min,
+configurable) with a stability probe at every point — self-oscillation clips within
+microseconds here, so 10 ms of silence proves stability; unstable territory is marked
+black and walked around, never measured inside. Three heatmaps: Q, centre shift, and
+**T_eff/T0** — the temperature map the paper derives but never images (bump *area* is
+the temperature proxy, by equipartition). Cross-checks from the same data: Eq. 8 as a
+slope-1 line through every stable point, K linear in gain along both damping phases,
+and three settings re-applied cold to prove the maps work as a lookup. Then the
+designer: `report()` (measured values + ring-up time, detection bandwidth, stability
+margin, and an acquisition plan with bins/record-length/duration), `design_Q()`,
+`design_shift()`, and the four canonical operating modes printed with their costs.
+Ends with the SEO (their Fig. 12): our resonator grows on microsecond timescales, so
+saturation is the fast limiter and the software loop trims the equilibrium onto a
+setpoint — same architecture, honestly labelled difference. `EMULATION = False` runs
+the identical atlas on the real coil.
+
+One fix during construction, caught on review: a misplaced sign in the broadening-branch
+linearity check (computed `1 + Q0/Q` instead of `K`).
+
+### New: `SEQUENCER_PLAN.md` (Stage 11, design only)
+
+The missing fabric feature, specified before any Verilog: 8 parameter sets stepped by
+32-bit timers (8 ns resolution) or an external trigger edge; a coefficient-source mux
+in front of the phase shifter (control values, not datapath); per-set flags to fire an
+ASG burst (the stock generator's unused burst mode is the excitation pulse) and to arm
+the acquisition (phase-coherent capture). Power-on behaviour bit-for-bit unchanged.
+Includes the Stage 11 verification plan — timing truth by memory-stopwatch, the
+paper's Fig. 11 sequence emulated end to end — and three open questions for review.
+
+---
+
+## 2026-07-30 — Stage 9 full run: four faults, four fixes, each one diagnosed from the numbers
+
+| Step | Symptom | Cause | Fix |
+|---|---|---|---|
+| 1 | Width +42%, centre −16 kHz — but the *data points* traced the correct Lorentzian | `capture()` armed first and settled second, so each record began with the filter pipeline still flushing the previous tuning. The sweep's first point inherited the resonance-peak power of whatever came before it, and one poisoned point at the far end of a quadratic fit has maximal leverage | `capture()` now settles at the new tuning, *then* arms with a fresh writer: sample 0 is already clean. Applies to every capture everywhere |
+| 3 | "Electron" *amplified* 1.29× instead of rejected 0.70× | The receiver was never re-pointed: Step 2's sweeps park the LO 2.5 linewidths away, so both tone readings were the averaged residue of a rotating phasor — measured 7.6e4 against a predicted 2.8e7, a factor ~370, which is the ratio that betrayed it | `acq.tune(f0)` before each tone measurement. The decoupling itself (−100 kHz shift, width −12%) had worked all along |
+| 4 | Servo improvement 2.0× (gate: 3×) | Not a bug — the *exact* textbook residual of a P-only controller (gain 0.4) chasing a 30-cycle sinusoid; simulation reproduces 2.0× to the digit | PI control, gains from simulation (Kp = Ki = 0.5): 11× nominal, 7.5× with slope calibration 30% off; integrator pauses while the actuator is clamped |
+| 5 | Chain latency −0.04 ms (negative), against 2.09 ms analytic | The stimulus was never reset between the five repeats: after the first, the tone was already on, the "edge" landed at the counter read itself, and the result was minus half the read-to-read gap | `step_latency()` takes a prep function restoring the OFF state before every repeat, and settles before arming, same discipline as `capture()` |
+
+Step 2, meanwhile, passed at all three SNRs with K consistent to 0.007 — the sweep
+machinery and the noise are sound; every fault above was in this stage's newest code.
+
+---
+
 ## 2026-07-30 — Stage 9 Step 1, third method: the power sweep. The first two failed honestly
 
 The spectrum-division fix failed too (+88.7% width): the ratio of two 16-average

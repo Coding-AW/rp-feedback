@@ -270,6 +270,7 @@ set rtl_dir "$proj_root/Test_Project.srcs/sources_1/imports/rp/rtl/classic"
 set fp_files [list]
 foreach f [lsort [glob -nocomplain "$rtl_dir/red_pitaya_acq*.v"]] { lappend fp_files $f }
 foreach f [lsort [glob -nocomplain "$rtl_dir/red_pitaya_resonator.v"]] { lappend fp_files $f }
+foreach f [lsort [glob -nocomplain "$rtl_dir/red_pitaya_sequencer.v"]] { lappend fp_files $f }
 foreach f [list "$rtl_dir/fir_coeffs.vh" "$rtl_dir/fir_params.vh" \
                 "$rtl_dir/red_pitaya_phaseshift.v" \
                 "$rtl_dir/red_pitaya_scope.v" \

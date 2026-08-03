@@ -71,6 +71,15 @@ module red_pitaya_phaseshift #(
    output     [ DWI-1: 0]    dat_a_o   ,  //!< output CH A (phase/gain shifted)
    output     [ DWI-1: 0]    dat_b_o   ,  //!< output CH B (zero)
 
+   // ---- coefficients from the sequencer (Stage 11) ----
+   //  When ext_sel_i is high the two coefficients come from these inputs
+   //  instead of from the software registers, so a state machine can rewrite
+   //  the feedback phase at exact times. Tie ext_sel_i low and this module
+   //  behaves exactly as it did before.
+   input      [ DWC-1: 0]    ci_ext_i  ,  //!< A*cos(phi) from the sequencer
+   input      [ DWC-1: 0]    cq_ext_i  ,  //!< A*sin(phi) from the sequencer
+   input                     ext_sel_i ,  //!< 1 = use the sequencer's pair
+
    // ---- system bus ----
    input      [ 32-1: 0]     sys_addr  ,  //!< bus address
    input      [ 32-1: 0]     sys_wdata ,  //!< bus write data
@@ -258,11 +267,32 @@ end
 
 //---------------------------------------------------------------------------------
 //  Weighted sum with the host coefficients, then rescale and saturate.
-//     acc    = set_ci*I + set_cq*Q      (still scaled by 2^FRAC)
+//     acc    = ci*I + cq*Q              (still scaled by 2^FRAC)
 //     scaled = acc >>> FRAC             (back to 14-bit range)
 //---------------------------------------------------------------------------------
-wire signed [ DWC+DWI-1:0]    mult_i = set_ci * i_reg ;   // 16b * 14b = 30b
-wire signed [ DWC+DWI-1:0]    mult_q = set_cq * q_samp;
+//  Coefficient source select, REGISTERED.
+//
+//  The mux is deliberately not combinational. Putting a 2-to-1 select directly
+//  in front of a multiplier input adds LUT depth to a path that already reaches
+//  a DSP, and this file has lost time twice to exactly that kind of addition
+//  (see FIX 6 and FIX 7 above). Registering it puts the mux between two
+//  flip-flops instead, where it has a whole clock to settle, and costs only one
+//  cycle of latency on a COEFFICIENT change - which is quasi-static control,
+//  not datapath. The multiply below sees a register output either way.
+reg signed [ DWC-1: 0] ci_use, cq_use;
+
+always @(posedge clk_i) begin
+   if (rstn_i == 1'b0) begin
+      ci_use <= {DWC{1'b0}};
+      cq_use <= {DWC{1'b0}};
+   end else begin
+      ci_use <= ext_sel_i ? $signed(ci_ext_i) : set_ci;
+      cq_use <= ext_sel_i ? $signed(cq_ext_i) : set_cq;
+   end
+end
+
+wire signed [ DWC+DWI-1:0]    mult_i = ci_use * i_reg ;   // 16b * 14b = 30b
+wire signed [ DWC+DWI-1:0]    mult_q = cq_use * q_samp;
 wire signed [ DWC+DWI  :0]    acc    = mult_i + mult_q;   // 31 bits
 
 //---------------------------------------------------------------------------------

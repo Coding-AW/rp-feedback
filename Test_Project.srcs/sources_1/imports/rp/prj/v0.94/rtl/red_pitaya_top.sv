@@ -303,14 +303,50 @@ sys_bus_interconnect #(
 // from hanging the bus - so every slot must have either a real module or a stub.
 // Slots in use:  0 housekeeping, 1 scope, 2 signal generator,
 //                3 phase shifter, 6 acquisition system.
-// Slot 4 now holds the digital resonator (0x40400000). Slots 5 (was daisy
-// chain) and 7 are unused and must still be stubbed - a stub acknowledges bus accesses and returns zero, so
+// Slot 4 holds the digital resonator (0x40400000) and slot 7 the parameter
+// sequencer (0x40700000). Slot 5 (was daisy chain) is unused and must still be
+// stubbed - a stub acknowledges bus accesses and returns zero, so
 // software touching an unused address gets a clean answer instead of hanging the
 // bus waiting for a reply that never comes.
 // sys[4] is no longer stubbed - it belongs to the digital resonator, added so
 // the feedback loop can be closed against a plant whose Q is known exactly.
 sys_bus_stub sys_bus_stub_5 (sys[5]);
-sys_bus_stub sys_bus_stub_7 (sys[7]);
+
+////////////////////////////////////////////////////////////////////////////////
+//  PARAMETER SEQUENCER  -  times the feedback phase in hardware
+//
+//  Rewrites the phase shifter's two coefficients at exact times, or on an
+//  external trigger edge. Stage 9 measured the software control interval at
+//  45 ms against a fabric clock of 8 ns, so timed switching cannot live in
+//  Python. See red_pitaya_sequencer.v and SEQUENCER_PLAN.md.
+//
+//  IDLE AT POWER-ON. Its source bit defaults to 0, so the phase shifter uses
+//  its own registers and the board behaves exactly as it did before.
+//
+//  burst_o and acq_arm_o are brought out but not yet connected: wiring them
+//  would need new ports on the signal generator and the acquisition system,
+//  which is a separate change. They are left unconnected deliberately, so
+//  verify_rtl.py reporting them is expected.
+////////////////////////////////////////////////////////////////////////////////
+logic seq_burst, seq_acq_arm;
+
+red_pitaya_sequencer i_seq (
+  .clk_i     (adc_clk     ),
+  .rstn_i    (adc_rstn    ),
+  .ci_o      (seq_ci      ),
+  .cq_o      (seq_cq      ),
+  .sel_o     (seq_sel     ),
+  .burst_o   (seq_burst   ),
+  .acq_arm_o (seq_acq_arm ),
+  .trig_i    (exp_p_in[0] ),   // expansion header DIO0_P
+  .sys_addr  (sys[7].addr ),
+  .sys_wdata (sys[7].wdata),
+  .sys_wen   (sys[7].wen  ),
+  .sys_ren   (sys[7].ren  ),
+  .sys_rdata (sys[7].rdata),
+  .sys_err   (sys[7].err  ),
+  .sys_ack   (sys[7].ack  )
+);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Analog mixed signals (PDM analog outputs)
@@ -572,6 +608,9 @@ red_pitaya_asg i_asg (
 //  instantiation is correct regardless of the file's extension.
 //
 //  Port-by-port meaning of this instance:
+logic [16-1:0] seq_ci, seq_cq;
+logic          seq_sel;
+
 red_pitaya_phaseshift i_ps (
    // ---- data path ----
   .clk_i           (adc_clk   ),  // 125 MHz processing clock (same as the rest)
@@ -581,6 +620,12 @@ red_pitaya_phaseshift i_ps (
   .dat_b_i         (adc_dat_ps[1]),  // INPUT  CH B: unused in this single-channel build
   .dat_a_o         (pid_dat[0]),  // OUTPUT CH A: phase/gain-shifted result -> DAC CH A
   .dat_b_o         (pid_dat[1]),  // OUTPUT CH B: module drives this to zero
+   // ---- coefficients from the sequencer (Stage 11) ----
+   //  With seq_sel low - the power-on state - the phase shifter uses its own
+   //  software registers and behaves exactly as before.
+  .ci_ext_i        (seq_ci    ),
+  .cq_ext_i        (seq_cq    ),
+  .ext_sel_i       (seq_sel   ),
    // ---- system bus: slot 3 (0x40300000), formerly the PID's ----
   .sys_addr        (sys[3].addr ),  // register address from the CPU
   .sys_wdata       (sys[3].wdata),  // data the CPU writes (coefficients, delay, etc.)

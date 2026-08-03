@@ -101,6 +101,25 @@ def _free_names(fn):
 
 
 # ---------------------------------------------------------------------------
+
+def _own_returns(fn):
+    """The return statements belonging to THIS function.
+
+    ast.walk descends into nested definitions, so a helper defined inside a
+    function would have its returns attributed to the parent - and a parent
+    returning a 4-tuple through a 2-tuple-returning inner helper then reads as
+    "returns 2". Nested functions are a different function's business.
+    """
+    out, stack = [], list(fn.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if isinstance(node, ast.Return) and node.value is not None:
+            out.append(node)
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
 def check(path):
     nb = json.load(open(path, encoding='utf-8'))
     cells = [''.join(c['source']) for c in nb['cells'] if c['cell_type'] == 'code']
@@ -124,8 +143,8 @@ def check(path):
             names = [x.arg for x in a.args]
             sigs[n.name] = (names, len(names) - len(a.defaults),
                             a.vararg is not None, a.kwarg is not None)
-            for r in ast.walk(n):
-                if isinstance(r, ast.Return) and isinstance(r.value, ast.Tuple):
+            for r in _own_returns(n):
+                if isinstance(r.value, ast.Tuple):
                     rets.setdefault(n.name, set()).add(len(r.value.elts))
 
     # ---- 1. calls ---------------------------------------------------------
