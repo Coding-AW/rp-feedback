@@ -370,16 +370,29 @@ if {[llength $stale] > 0} {
     puts "  Netlist is newer than every source file. Good."
 }
 
-#  Record the fingerprint next to the bitstream, so it can be copied to the
-#  board alongside it and compared with what the chip reports.
+# -----------------------------------------------------------------------------
+#  Write the fingerprint file NOW, then rewrite it in STEP 4 with the timing
+#  verdict once that is known.
+#
+#  Writing it twice looks redundant. It is not. On 2026-08-03 this write lived
+#  only in STEP 4, and STEP 4 did not complete - so bitstream_id.txt did not
+#  exist at all. run_on_board.ps1 skips that file silently when it is missing,
+#  check_system.py had nothing to compare against, and reported "OK" for a
+#  bitstream it had never verified. The board was still running a build from
+#  before the sequencer existed.
+#
+#  So: the file must exist the moment a bitstream exists, even if everything
+#  after this point fails. It is marked "not yet checked" until STEP 4 replaces
+#  it, and check_system.py treats that as unverified rather than as approval.
+# -----------------------------------------------------------------------------
 set fh [open "$proj_root/Test_Project.runs/impl_1/bitstream_id.txt" w]
 puts $fh $build_id_hex
 puts $fh "# fingerprint above is what register 0x48 reports"
 puts $fh "# built    : [clock format [clock seconds]]"
 puts $fh "# source   : $git_line"
-if {$git_status eq "ok" && $git_dirty == 0} {
-    puts $fh "# reproduce: git checkout $git_commit"
-}
+puts $fh "# timing   : NOT YET CHECKED - build_project.tcl did not reach STEP 4."
+puts $fh "#            If you are reading this in a finished build, something"
+puts $fh "#            went wrong after implementation. Do not load this."
 close $fh
 
 # -----------------------------------------------------------------------------
@@ -392,15 +405,73 @@ open_run impl_1
 #  steps of 8 billionths of a second; if a calculation needs longer than that,
 #  it captures a half-finished answer. Negative slack means at least one
 #  calculation is too slow.
-set wns  [get_property SLACK [get_timing_paths -delay_type max]]
-set fail [llength [get_timing_paths -delay_type max -max_paths 1000 -slack_lessthan 0]]
+# -----------------------------------------------------------------------------
+#  BUG, fixed 2026-08-03. This line used to read:
+#
+#      set fail [llength [get_timing_paths ... -slack_lessthan 0]]
+#
+#  There is no such option. Vivado 2020.1 answers:
+#
+#      ERROR: [Common 17-170] Unknown option '-slack_lessthan'
+#
+#  and an ERROR in a sourced Tcl script ABORTS IT. So STEP 4 has never once run
+#  to completion on this project. No timing verdict was ever printed, STEP 5
+#  never ran, and - once the fingerprint write was moved into STEP 4 - that file
+#  stopped being written too, which is what let a stale bitstream sit on the
+#  board while check_system.py reported no issues.
+#
+#  One wrong option name, and every check downstream of it silently ceased to
+#  exist. The build still produced a bitstream, which is what made it invisible.
+#
+#  Replaced with options that exist in every Vivado version: ask for the worst
+#  paths and count the negative ones here. Capped, because asking for tens of
+#  thousands of paths is slow and the exact number stops mattering once it is
+#  clear the design fails.
+# -----------------------------------------------------------------------------
+#  Wrapped in catch, for the same reason. If measuring timing fails again -
+#  another renamed option, a Vivado upgrade - the script must carry on and say
+#  "I could not check" rather than dying and taking every later step with it.
+#  An unmeasured build is treated as a FAILING one, never as a passing one.
+set CAP    2000
+set fail   0
+set capped 0
+set wns    0.0
+set timing_known 1
+
+if {[catch {
+    set wns [get_property SLACK [get_timing_paths -delay_type max]]
+    if {$wns < 0} {
+        foreach p [get_timing_paths -delay_type max -max_paths $CAP -nworst 1] {
+            if {[get_property SLACK $p] < 0} { incr fail }
+        }
+        if {$fail >= $CAP} { set capped 1 }
+    }
+} err]} {
+    set timing_known 0
+    puts ""
+    puts "  *** COULD NOT MEASURE TIMING ***"
+    puts "  $err"
+    puts ""
+    puts "  Treating this build as FAILED, because an unchecked build and a good"
+    puts "  build must not look the same. Open the implemented design and run"
+    puts "  Report Timing Summary by hand before trusting anything from it."
+}
 
 puts ""
 puts "  TIMING"
-puts "    Time to spare on the slowest calculation : [format %.3f $wns] ns"
-puts "    Calculations that are too slow           : $fail"
+if {!$timing_known} {
+    puts "    Not measured - see the error above."
+} else {
+    puts "    Time to spare on the slowest calculation : [format %.3f $wns] ns"
+    if {$capped} {
+        puts "    Calculations that are too slow           : $fail or more (capped)"
+    } else {
+        puts "    Calculations that are too slow           : $fail"
+    }
+}
 puts ""
-if {$wns >= 0} {
+set timing_ok [expr {$timing_known && $wns >= 0}]
+if {$timing_ok} {
     puts "    PASS - every calculation finishes in time."
 } else {
     puts "    FAIL - some calculations do not finish in time."
@@ -408,13 +479,48 @@ if {$wns >= 0} {
     puts "    This matters: a design that fails timing does not fail cleanly. It"
     puts "    may work on a cool day and produce corrupted numbers on a warm one."
     puts "    Do not trust measurements from this build."
-    puts ""
-    puts "    The slowest paths are:"
-    foreach p [lrange [get_timing_paths -delay_type max -max_paths 5] 0 4] {
-        puts "      [format %8.3f [get_property SLACK $p]] ns   \
+    if {$timing_known} {
+        puts ""
+        puts "    The slowest paths are:"
+        catch {
+            foreach p [lrange [get_timing_paths -delay_type max -max_paths 5] 0 4] {
+                puts "      [format %8.3f [get_property SLACK $p]] ns   \
 [get_property STARTPOINT_PIN $p] -> [get_property ENDPOINT_PIN $p]"
+            }
+        }
     }
 }
+
+# -----------------------------------------------------------------------------
+#  Record the fingerprint next to the bitstream, so it can be copied to the
+#  board alongside it and compared with what the chip reports - AND record
+#  whether this build met timing, because the fingerprint alone only proves the
+#  board is running what was built, not that what was built is trustworthy.
+#
+#  On 2026-08-03 a build missed timing by 6.799 ns with 6224 failing endpoints.
+#  It produced a bitstream, a valid fingerprint, and a confident "NEXT STEPS:
+#  copy it to the board". Register reads came back as zeros and an afternoon
+#  went into looking for a missing module that was present all along.
+# -----------------------------------------------------------------------------
+set fh [open "$proj_root/Test_Project.runs/impl_1/bitstream_id.txt" w]
+puts $fh $build_id_hex
+puts $fh "# fingerprint above is what register 0x48 reports"
+puts $fh "# built    : [clock format [clock seconds]]"
+puts $fh "# source   : $git_line"
+if {$timing_ok} {
+    puts $fh "# timing   : PASS  worst slack [format %.3f $wns] ns, 0 failing"
+} elseif {!$timing_known} {
+    puts $fh "# timing   : *** NOT MEASURED *** the timing query failed - see the"
+    puts $fh "#            build log. Treat as failing until checked by hand."
+} else {
+    puts $fh "# timing   : *** FAIL *** worst slack [format %.3f $wns] ns, $fail failing path(s)"
+    puts $fh "# WARNING  : this bitstream does not meet timing. Measurements taken"
+    puts $fh "#            from it cannot be trusted, whatever the fingerprint says."
+}
+if {$git_status eq "ok" && $git_dirty == 0} {
+    puts $fh "# reproduce: git checkout $git_commit"
+}
+close $fh
 
 # --- how full is the chip ----------------------------------------------------
 puts ""
@@ -435,7 +541,45 @@ set mins [expr {([clock seconds] - $t_start) / 60}]
 
 puts "  Build took about $mins minutes."
 puts ""
-if {[file exists $bit]} {
+if {[file exists $bit] && !$timing_ok} {
+    # -------------------------------------------------------------------------
+    #  A bitstream exists, but STEP 4 just said not to trust it. Saying "copy it
+    #  to the board" here as though nothing had happened is how the 2026-08-03
+    #  afternoon was lost: the FAIL scrolled past, the cheerful NEXT STEPS were
+    #  at the bottom where the eye lands, and the board was loaded with logic
+    #  that could not work. The verdict has to be the LAST thing on screen.
+    # -------------------------------------------------------------------------
+    puts "  *** DO NOT LOAD THIS BITSTREAM ***"
+    puts ""
+    if {$timing_known} {
+        puts "  It built, but it misses timing by [format %.3f [expr {-$wns}]] ns on an 8 ns clock,"
+        puts "  across $fail path(s). The chip would latch half-finished answers. What"
+    } else {
+        puts "  It built, but its timing could not be measured - see STEP 4 above."
+        puts "  An unchecked build is treated as a failing one. What a timing"
+        puts "  failure"
+    }
+    puts "  that looks like from software is not a clean failure - it is registers"
+    puts "  reading zero, or values that change when nothing changed, or numbers"
+    puts "  that look plausible and are wrong."
+    puts ""
+    puts "  The bitstream is at:"
+    puts "    $bit"
+    puts "  It is left in place deliberately, so the reports can be examined - not"
+    puts "  because it is usable."
+    puts ""
+    puts "  WHAT TO DO"
+    puts "    1. Open the timing report:  Flow Navigator -> Implementation ->"
+    puts "       Open Implemented Design -> Report Timing Summary."
+    puts "    2. Look at where the failing paths START and END. If they are in"
+    puts "       i_reso, this is the resonator's recursive loop - see the timing"
+    puts "       note in red_pitaya_resonator.v, which says to NARROW the widths,"
+    puts "       not widen them, and CHANGELOG.md for 2026-08-03."
+    puts "    3. Fix it, rebuild, and only then load."
+    puts ""
+    puts "  The board is still running whatever it had before. That is the right"
+    puts "  place for it to be."
+} elseif {[file exists $bit]} {
     puts "  Bitstream: $bit"
     puts ""
     puts "  NEXT STEPS"

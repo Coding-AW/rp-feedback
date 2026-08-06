@@ -318,8 +318,42 @@ wire signed [SW: 0] u_nxt = ((cu - sv + ROUND) >>> SHIFT)
                           + $signed({{(SW+1-18){drive_r[17]}}, drive_r});
 wire signed [SW: 0] v_nxt =  ((su + cv + ROUND) >>> SHIFT);
 
-wire u_over = (u_nxt > SAT_HI) || (u_nxt < SAT_LO);
-wire v_over = (v_nxt > SAT_HI) || (v_nxt < SAT_LO);
+//---------------------------------------------------------------------------------
+//  Saturation, detected from the top TWO bits instead of by comparison.
+//
+//  EDIT 2026-08-03. This is a pure implementation change: the values written to
+//  u and v, and the clip flag, are BIT-FOR-BIT what they were. Nothing about the
+//  emulated physics, the coefficient scaling or the software changes.
+//
+//  WHY IT WAS WORTH DOING
+//  The old form asked `u_nxt > SAT_HI` and `u_nxt < SAT_LO`. Each of those is a
+//  26-bit magnitude comparison, and Vivado builds one as a carry chain - which
+//  it then had to place AFTER the adder's own carry chain, inside a recursion
+//  that must close in 8 ns. The 2026-08-03 timing report showed the two chains
+//  in series: 18 CARRY4 levels, about 8.6 ns of the 14.7 ns path.
+//
+//  THE OBSERVATION
+//  u_nxt is 26-bit signed; SAT_HI and SAT_LO are exactly the largest and
+//  smallest values a 25-bit signed number can hold. So "does it fit in 25 bits"
+//  is precisely "are the top two bits the same" - the textbook signed overflow
+//  test, and one XOR gate rather than a carry chain:
+//
+//      u_nxt[25] u_nxt[24]   meaning
+//      --------- ---------   -----------------------------------------
+//          0         0       fits, positive
+//          0         1       overflowed positive  -> SAT_HI
+//          1         0       overflowed negative  -> SAT_LO
+//          1         1       fits, negative
+//
+//  Verified equivalent by exhaustive comparison of both forms over the whole
+//  26-bit range at reduced widths, and over the boundaries plus 400k random
+//  values at the real width: zero mismatches.
+//
+//  NOTE: this shortens the loop but does not by itself make it close in 8 ns -
+//  the unregistered DSP multiply alone is 3.8 ns. See CHANGELOG.md, 2026-08-03.
+//---------------------------------------------------------------------------------
+wire u_over = u_nxt[SW] ^ u_nxt[SW-1];
+wire v_over = v_nxt[SW] ^ v_nxt[SW-1];
 
 always @(posedge clk_i) begin
   if (rstn_i == 1'b0 || set_clr) begin
@@ -327,8 +361,8 @@ always @(posedge clk_i) begin
     v       <= {SW{1'b0}};
     clipped <= 1'b0;
   end else if (set_ena) begin
-    u <= (u_nxt > SAT_HI) ? SAT_HI : (u_nxt < SAT_LO) ? SAT_LO : u_nxt[SW-1:0];
-    v <= (v_nxt > SAT_HI) ? SAT_HI : (v_nxt < SAT_LO) ? SAT_LO : v_nxt[SW-1:0];
+    u <= u_over ? (u_nxt[SW] ? SAT_LO : SAT_HI) : u_nxt[SW-1:0];
+    v <= v_over ? (v_nxt[SW] ? SAT_LO : SAT_HI) : v_nxt[SW-1:0];
     if (u_over || v_over) clipped <= 1'b1;
   end else begin
     u <= {SW{1'b0}};

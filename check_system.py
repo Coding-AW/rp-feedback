@@ -130,11 +130,33 @@ try:
     # -----------------------------------------------------------------------
     build_id = acq.r(0x48) if acq_alive else 0
     expected = None
+    timing_note = None
     for cand in ('bitstream_id.txt',
                  os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'bitstream_id.txt')):
         if os.path.exists(cand):
-            expected = open(cand).read().strip().upper().replace('0X', '')
+            # FIX 2026-08-03: this used to be
+            #     open(cand).read().strip().upper().replace('0X', '')
+            # which takes the WHOLE FILE - fingerprint and all the '#' comment
+            # lines below it - and compares that to an 8-character hex string.
+            # It could never match, so this check reported "the chip is running
+            # DIFFERENT logic" on every single run, including builds that were
+            # perfectly current. A check that always cries wolf is worse than no
+            # check: it taught us to scroll past the one message that would have
+            # caught a stale bitstream.
+            #
+            # Read the first line that is not blank and not a comment.
+            for line in open(cand):
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    expected = line.upper().replace('0X', '')
+                    break
+            # The timing verdict, if build_project.tcl recorded one. A matching
+            # fingerprint proves the board runs what was built; it says nothing
+            # about whether what was built works.
+            for line in open(cand):
+                if 'timing' in line.lower() and 'FAIL' in line:
+                    timing_note = line.strip().lstrip('#').strip()
             break
 
     if acq_alive and build_id == 0:
@@ -149,6 +171,41 @@ try:
             'Chip reports 0x%08X, bitstream_id.txt says 0x%s' % (build_id, expected),
             'Either an old bitstream is loaded, or the build did not pick up\n'
             'your edits. Rebuild with build_project.tcl and reload.')
+    elif acq_alive and expected is None:
+        # -------------------------------------------------------------------
+        #  FIX 2026-08-03. This branch did not exist. When bitstream_id.txt was
+        #  absent, `expected` stayed None, the comparison above was skipped, and
+        #  control fell through to the plain "OK, build fingerprint 0x..." below
+        #  - announcing success for a check that had not been performed.
+        #
+        #  That is precisely how an afternoon was lost: the fingerprint file was
+        #  never written (the build was regenerated from the Vivado GUI, which
+        #  does not write it), run_on_board.ps1 skips it silently when missing,
+        #  so the board never received it, and this script cheerfully reported
+        #  no issues about a bitstream it had not verified. Meanwhile slot 7 was
+        #  still a stub, answering every read with zero.
+        #
+        #  "I could not check" and "I checked and it is fine" must never look
+        #  the same.
+        # -------------------------------------------------------------------
+        say('WARNING', 'The bitstream could NOT be verified - this is not an all-clear.',
+            'Chip reports fingerprint 0x%08X, but bitstream_id.txt is not here '
+            'to compare it against.' % build_id,
+            'That file is written by build_project.tcl next to the bitstream and\n'
+            'must be copied to the board with it. Without it, this script cannot\n'
+            'tell a current bitstream from a month-old one.\n'
+            '  - If you built from the Vivado GUI, the file was never written.\n'
+            '    Rebuild with build_project.tcl instead.\n'
+            '  - If you built with build_project.tcl, copy bitstream_id.txt\n'
+            '    across alongside red_pitaya_top.bit.')
+    elif acq_alive and timing_note:
+        say('PROBLEM', 'The chip is running a bitstream that FAILED TIMING.',
+            'Fingerprint 0x%08X matches - but %s' % (build_id, timing_note),
+            'The right logic is loaded, and it is logic that cannot be trusted.\n'
+            'A design that misses timing latches half-finished answers: registers\n'
+            'read zero, values change when nothing changed, numbers look\n'
+            'plausible and are wrong. Fix the timing, rebuild, reload.\n'
+            'See CHANGELOG.md for 2026-08-03.')
     elif acq_alive:
         say('OK', 'Build fingerprint 0x%08X.' % build_id)
 
@@ -165,6 +222,48 @@ try:
             'Load the current bitstream. Check the file fingerprint matches,\n'
             'because the board looks healthy either way.\n'
             'See BITSTREAM_WORKFLOW.pdf, Workflow A.')
+
+    # -----------------------------------------------------------------------
+    #  WHICH MODULES ARE ACTUALLY IN THIS BITSTREAM  (added 2026-08-03)
+    #
+    #  A fingerprint tells you whether the chip matches a file on the PC. It
+    #  cannot tell you that if the file is missing, and it says nothing at all
+    #  about which modules the design contains. This asks each module directly.
+    #
+    #  The trap this exists for: an unused bus slot is filled by sys_bus_stub,
+    #  which drives  bus.ack = 1  and  bus.rdata = 'x  - so it ACKNOWLEDGES the
+    #  read and returns zero, instantly and without error. A slot holding a stub
+    #  and a slot holding a module whose version register happens to read zero
+    #  are indistinguishable from software. On 2026-08-03 Stage 11 read zero
+    #  from slot 7, concluded "this bitstream has no sequencer", and was right -
+    #  the board was running a build from before the sequencer existed, while
+    #  Stages 8 and 9 passed because neither touches slot 7.
+    #
+    #  Each entry is a module, its version register, and the value it must
+    #  return. A version register is the only honest presence test: a stub
+    #  cannot fake one.
+    # -----------------------------------------------------------------------
+    for name, base, off, want in (
+            ('parameter sequencer', 0x40700000, 0x0C, 0x5E900001),
+    ):
+        try:
+            got = Reg(base).r(off)
+        except Exception as e:
+            say('WARNING', 'Could not read the %s at 0x%08X.' % (name, base), str(e))
+            continue
+        if got == want:
+            say('OK', 'The %s is present (version 0x%08X).' % (name, got))
+        else:
+            say('PROBLEM', 'The %s is NOT in this bitstream.' % name,
+                'Slot at 0x%08X answered 0x%08X, expected 0x%08X.'
+                % (base, got, want),
+                'Zero here does not mean a broken module - it means the slot is\n'
+                'still a stub, so this bitstream predates the module. An older\n'
+                'build passes every other test on this page and every notebook\n'
+                'that does not touch this slot.\n'
+                'Rebuild with build_project.tcl, then reload following\n'
+                'BITSTREAM_WORKFLOW.pdf Workflow A - the md5sum step in A4 is\n'
+                'the one that proves the file actually arrived.')
 except Exception as e:
     say('PROBLEM', 'Could not read the chip registers.', str(e),
         'Is this running on the Red Pitaya, as administrator?')

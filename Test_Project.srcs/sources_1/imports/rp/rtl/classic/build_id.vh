@@ -1,8 +1,9 @@
 // ==========================================================================
 //  BUILD FINGERPRINT - GENERATED FILE, DO NOT EDIT
 //
-//  Written by build_project.tcl on Thu Jul 30 17:28:23 +0100 2026
-//  from 12 source files. Readable at register 0x48.
+//  Written by build_project.tcl on Mon Aug 03 22:06:39 +0100 2026
+//  Source: commit e0aa530 PLUS 10 uncommitted change(s)
+//  from 13 source files. Readable at register 0x48.
 //
 //  If the value the chip reports does not match the one in
 //  bitstream_id.txt next to the bitstream, the board is running
@@ -10,4 +11,4 @@
 //  in the repository history for how that happens.
 // ==========================================================================
 
-localparam [31:0] GEN_BUILD_ID = 32'hECF6F64D;
+localparam [31:0] GEN_BUILD_ID = 32'h096CEAD0;

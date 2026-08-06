@@ -1,0 +1,88 @@
+{
+  "build_id": "0x096CEAD0",
+  "calibration": {
+    "amp_gain_db_measured": 34.6369887256395,
+    "auto": true,
+    "drive_adopted": false,
+    "drive_linear_max": 0.005863414055048291,
+    "drive_max": 0.05623413251903491,
+    "drive_window": [
+      NaN,
+      NaN
+    ],
+    "ext_gain_db_used": 34.6369887256395,
+    "g_passive": 0.0158,
+    "min_amp_for_fit": Infinity,
+    "search_step_halvings": 0,
+    "search_step_hz": 100000.0
+  },
+  "coil": {
+    "f0_hz": 39940840.71138743,
+    "floor_frac_direct": 0.02904532154286021,
+    "floor_frac_fit": 0.04586539310390258,
+    "linewidth_hz": 224435.76315532313,
+    "q_alt_dec": 163.8971258309557,
+    "q_swept": 177.96112415357777
+  },
+  "coupling": {
+    "c_couple_f": 3e-13,
+    "c_stray_est_f": 2.45e-11,
+    "noise_ratio_coil_over_board": 0.047477015352363004,
+    "predicted_divider": 0.012096774193548387,
+    "xc_ohm_at_f0": 13282.556589294081
+  },
+  "drive": {
+    "frac": 0.0032,
+    "linear": false
+  },
+  "feedback": {
+    "k_per_gain": NaN,
+    "note": "phase axis is loop-dependent: cables, coil and any amplifier shift it. Only phases RELATIVE to phi_narrow are portable.",
+    "onset_gain_extrapolated": NaN,
+    "phi_narrow_deg": 342.8291140480045,
+    "phi_shift_deg": 48.12302609140848,
+    "q_max_mapped": 87.95628588171678,
+    "shift_max_hz": NaN,
+    "shift_rms_err_hz": NaN
+  },
+  "lc_crosscheck": {
+    "c_coil_err_f": 6e-14,
+    "c_coil_f": 1.59e-12,
+    "c_implied_total_f": 3.7493194472968045e-11,
+    "c_model_total_f": 4.118274193548387e-11,
+    "c_parallel_err_f": 2e-12,
+    "c_parallel_f": 3.9e-11,
+    "c_unaccounted_f": -3.689547462515822e-12,
+    "f0_bare_coil_hz": 165535912.8742943,
+    "f0_deviation_sigma": 1.7157637679206816,
+    "f0_predicted_err_hz": 1067231.6816539024,
+    "f0_predicted_hz": 38109723.26002861,
+    "g_fwd_measured": 0.8250466849916415,
+    "g_fwd_passive": 0.015297803825972092,
+    "g_fwd_predicted": 0.009899480279043598,
+    "l_coil_err_h": 1.18e-08,
+    "l_coil_h": 4.235e-07,
+    "q_bare_coil_implied": 737.5647737554796,
+    "r_parallel_ohm": 18913.6620831431,
+    "r_series_ohm": 0.5972076257876499,
+    "z0_tank_ohm": 106.27974043825937
+  },
+  "measured_utc": "2026-08-06T15:31:24",
+  "receiver": {
+    "clean_halfwidth_hz": 6103.515625,
+    "dec_log2": 11,
+    "n_avg": 512,
+    "output_rate_hz": 61035.15625
+  },
+  "selftest": {
+    "after_ok": false,
+    "before_ok": true,
+    "q_error_after_frac": 0.05107582974981617,
+    "q_error_before_frac": -0.00034762339002436526
+  },
+  "source_note": "bench coil, 0.3 pF coupling caps both ports, room temperature",
+  "stability": {
+    "drift_hz_per_min": 368524.33797901514,
+    "scatter_hz": 30160.2878252877
+  }
+}

@@ -312,41 +312,10 @@ sys_bus_interconnect #(
 // the feedback loop can be closed against a plant whose Q is known exactly.
 sys_bus_stub sys_bus_stub_5 (sys[5]);
 
-////////////////////////////////////////////////////////////////////////////////
-//  PARAMETER SEQUENCER  -  times the feedback phase in hardware
-//
-//  Rewrites the phase shifter's two coefficients at exact times, or on an
-//  external trigger edge. Stage 9 measured the software control interval at
-//  45 ms against a fabric clock of 8 ns, so timed switching cannot live in
-//  Python. See red_pitaya_sequencer.v and SEQUENCER_PLAN.md.
-//
-//  IDLE AT POWER-ON. Its source bit defaults to 0, so the phase shifter uses
-//  its own registers and the board behaves exactly as it did before.
-//
-//  burst_o and acq_arm_o are brought out but not yet connected: wiring them
-//  would need new ports on the signal generator and the acquisition system,
-//  which is a separate change. They are left unconnected deliberately, so
-//  verify_rtl.py reporting them is expected.
-////////////////////////////////////////////////////////////////////////////////
-logic seq_burst, seq_acq_arm;
-
-red_pitaya_sequencer i_seq (
-  .clk_i     (adc_clk     ),
-  .rstn_i    (adc_rstn    ),
-  .ci_o      (seq_ci      ),
-  .cq_o      (seq_cq      ),
-  .sel_o     (seq_sel     ),
-  .burst_o   (seq_burst   ),
-  .acq_arm_o (seq_acq_arm ),
-  .trig_i    (exp_p_in[0] ),   // expansion header DIO0_P
-  .sys_addr  (sys[7].addr ),
-  .sys_wdata (sys[7].wdata),
-  .sys_wen   (sys[7].wen  ),
-  .sys_ren   (sys[7].ren  ),
-  .sys_rdata (sys[7].rdata),
-  .sys_err   (sys[7].err  ),
-  .sys_ack   (sys[7].ack  )
-);
+// Slot 7 belongs to the parameter sequencer, so it is no longer stubbed. Its
+// instantiation is NOT here - it lives further down, immediately above the
+// phase shifter it drives. See "PARAMETER SEQUENCER" below and the FIX note
+// there for why it had to move.
 
 ////////////////////////////////////////////////////////////////////////////////
 // Analog mixed signals (PDM analog outputs)
@@ -608,8 +577,55 @@ red_pitaya_asg i_asg (
 //  instantiation is correct regardless of the file's extension.
 //
 //  Port-by-port meaning of this instance:
+////////////////////////////////////////////////////////////////////////////////
+//  PARAMETER SEQUENCER  -  times the feedback phase in hardware
+//
+//  Rewrites the phase shifter's two coefficients at exact times, or on an
+//  external trigger edge. Stage 9 measured the software control interval at
+//  45 ms against a fabric clock of 8 ns, so timed switching cannot live in
+//  Python. See red_pitaya_sequencer.v and SEQUENCER_PLAN.md.
+//
+//  IDLE AT POWER-ON. Its source bit defaults to 0, so the phase shifter uses
+//  its own registers and the board behaves exactly as it did before.
+//
+//  burst_o and acq_arm_o are brought out but not yet connected: wiring them
+//  would need new ports on the signal generator and the acquisition system,
+//  which is a separate change. They are left unconnected deliberately, so
+//  verify_rtl.py reporting them is expected.
+//
+//  FIX (Stage 11 build): this block was originally placed up in the system-bus
+//  slot section, next to sys_bus_stub_5, which put it BEFORE two of the nets it
+//  connects to. SystemVerilog requires a `logic` declaration to precede its
+//  first use, and both offenders sat further down this file:
+//    * seq_ci / seq_cq / seq_sel  - declared with the phase shifter, just below
+//    * exp_p_in                   - declared in the House Keeping section,
+//                                   which is also below the old position
+//  Rather than scatter the House Keeping declarations, the instantiation moved
+//  down here, where everything it touches already exists. Nothing about the
+//  connections changed - only the position in the file. sys[7] is still the
+//  sequencer's bus slot, and the stub that used to occupy it is still removed.
+////////////////////////////////////////////////////////////////////////////////
 logic [16-1:0] seq_ci, seq_cq;
 logic          seq_sel;
+logic          seq_burst, seq_acq_arm;
+
+red_pitaya_sequencer i_seq (
+  .clk_i     (adc_clk     ),
+  .rstn_i    (adc_rstn    ),
+  .ci_o      (seq_ci      ),
+  .cq_o      (seq_cq      ),
+  .sel_o     (seq_sel     ),
+  .burst_o   (seq_burst   ),
+  .acq_arm_o (seq_acq_arm ),
+  .trig_i    (exp_p_in[0] ),   // expansion header DIO0_P
+  .sys_addr  (sys[7].addr ),
+  .sys_wdata (sys[7].wdata),
+  .sys_wen   (sys[7].wen  ),
+  .sys_ren   (sys[7].ren  ),
+  .sys_rdata (sys[7].rdata),
+  .sys_err   (sys[7].err  ),
+  .sys_ack   (sys[7].ack  )
+);
 
 red_pitaya_phaseshift i_ps (
    // ---- data path ----

@@ -248,9 +248,46 @@ end
 //  System bus
 //---------------------------------------------------------------------------------
 integer k;
-wire [SW-1:0] a_set  = sys_addr[SW+3:4];      // which set   (0x10 steps of 16)
-wire [1:0]    a_word = sys_addr[3:2];         // which word within it
-wire          a_is_set = (sys_addr[19:0] >= 20'h10) && (sys_addr[19:0] < 20'h10 + 16*NSET);
+
+//---------------------------------------------------------------------------------
+//  Set/word decode.
+//
+//  BUG, fixed 2026-08-03. This line used to be
+//
+//      wire [SW-1:0] a_set = sys_addr[SW+3:4];
+//
+//  which forgets that the sets START AT 0x10, not at 0. Bits [6:4] of a raw
+//  address are (address / 16), so set 0 at 0x10 decoded as 1, set 1 at 0x20 as
+//  2, and set 7 at 0x80 wrapped round to 0. Every set was written one slot high,
+//  and the top one landed on the bottom one.
+//
+//  WHY IT SURVIVED THE READ-BACK TEST
+//  Step 0 writes set 3 and reads set 3, and passed. It would: reads use the same
+//  decode as writes, so both went to slot 4 and agreed with each other. A
+//  read-back test cannot see an error that is applied identically in both
+//  directions - it only proves the memory holds what it was given, not that it
+//  was given the right address.
+//
+//  WHAT IT LOOKED LIKE
+//  The state machine starts at set 0 and reads mem_dur[0], which software had
+//  never written, so it was still zero from reset - and a duration of zero means
+//  WAIT FOR A TRIGGER. With no trigger enabled the sequence sat at set 0 for
+//  ever. Step 2 saw exactly that ("set 0, running True" after 200 and 400 ms).
+//  Step 1 saw the consequence: the coefficients never left mem_ci[0]/mem_cq[0],
+//  both zero, so nothing switched and its FFT measured whatever noise peak it
+//  could find - hence periods with no relation to what was programmed.
+//
+//  Subtracting the base first makes the arithmetic say what the register map
+//  says. a_word is unchanged and was always right: 0x10 is a multiple of 16, so
+//  the low bits are unaffected by the offset.
+//---------------------------------------------------------------------------------
+localparam [19:0] SET_BASE = 20'h10;
+
+wire [19:0]   a_off  = sys_addr[19:0] - SET_BASE;   // offset into the set block
+wire [SW-1:0] a_set  = a_off[SW+3:4];               // which set  (16 bytes each)
+wire [1:0]    a_word = sys_addr[3:2];               // which word within it
+wire          a_is_set = (sys_addr[19:0] >= SET_BASE)
+                      && (sys_addr[19:0] <  SET_BASE + 16*NSET);
 
 always @(posedge clk_i) begin
   if (rstn_i == 1'b0) begin

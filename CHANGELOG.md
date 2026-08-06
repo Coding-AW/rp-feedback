@@ -14,6 +14,997 @@ ion manipulation techniques in Penning traps*, Rev. Sci. Instrum. **92**, 103201
 
 ---
 
+## 2026-08-04 — The atlas was measuring the right thing with the wrong zero on its gain axis
+
+Comparing the measured atlas with Herkenhoff *et al.* Fig. 9 raised two questions:
+the self-oscillating region was about half the size, and it needed ~18 dB more
+feedback to reach. Neither turned out to be a difference in the physics.
+
+### The arithmetic
+
+With `oshift = 7` the fitted loop gain was **k = 0.73 per unit A**, so onset sat
+at A = 1/0.73 = **+2.73 dB**. The actuator ceiling is **+6.02 dB** (signed Q2.14,
+A ≤ 1.99994), leaving only **3.3 dB** of usable range above onset. The paper has
+5.5 dB above its onset. Since the oscillating region is bounded by
+`k·A·cos(φ−φ_N) ≥ 1`, its phase half-width is `arccos(A_onset/A)`:
+
+| | headroom above onset | half-width at the top | area |
+|---|---|---|---|
+| paper | 5.5 dB | 58° | 1.00 |
+| this rig, `oshift=7` | 3.3 dB | 47° | 0.48 |
+
+So the region was not small. **It was cut off by the ceiling.**
+
+The resonator divides its state by 2^`oshift` before the output leaves the
+module, so loop gain scales exactly as 2^−`oshift`. Walking that back:
+
+| `oshift` | k | predicted onset |
+|---|---|---|
+| 7 | 0.73 | +2.73 dB |
+| 6 | 1.46 | −3.29 dB |
+| **5** | **2.92** | **−9.31 dB** |
+| 4 | 5.84 | −15.33 dB (the paper's onset) |
+
+The entire 18 dB is three steps of one internal scaling constant. The two gain
+axes never had the same zero — one is referenced to the paper's electronics, the
+other to a Q2.14 coefficient magnitude.
+
+In the units that survive the comparison the rig was already doing well: **56×
+narrowing against the paper's 25×**, and a frequency pull of 0.72 linewidths
+against their ~0.7. The absolute numbers differ because Q₀ is 180 rather than
+~4000, and the Hz axis differs by the same factor as the linewidth.
+
+### What changed
+
+**`OSHIFT = 5`**, not 4. It gives a paper-like picture while leaving 15 dB of
+actuator margin above onset instead of 21 — and the margin matters, because
+lowering `oshift` makes the resonator's output larger and **the output saturator
+in `red_pitaya_resonator.v` has no status flag**. Only the *state* overflow sets
+`clipped`. Clip the output and nothing says so: the loop gain quietly compresses
+and onset drifts upward, which reads as a wrong measurement rather than a fault.
+Two existing checks catch it and both must be believed — the open-loop assert
+(Q_OL within 10% of `reso.q_q`) and `Q_LIN` in Step 1.
+
+**The gain axis is reframed around onset**, −24.0 to −2.5 dB, coarse at 2 dB
+below −14 and fine at 0.5 dB through onset. 29 rows, 696 points, about 12
+minutes. Deliberately wider on the low side than the prediction needs, because
+the prediction extrapolates a k fitted at `oshift = 7`.
+
+**A bracket guard in Step 0** prints the predicted onset and warns if it falls
+outside the axis — before the 12 minutes, not after. A scan that misses the
+boundary produces an atlas with no boundary in it, and every stability margin
+printed from it is then empty.
+
+**The gain cuts follow the measured onset** (`onset+0.5`, `−2.5`, `−5.5`) instead
+of fixed dB values, so they stay useful when `OSHIFT` changes rather than sliding
+off the interesting part of the map, or off the grid.
+
+**Two bugs fixed on the way.** `shift_f0()` hard-coded `oshift=7` independently of
+`config()`, so retuning the coil mid-scan silently reset the shift and moved the
+whole gain axis. And the first attempt made `config()` read a module-level
+`OSHIFT` defined two cells later — `verify_notebooks.py` refused it, correctly. It
+is a class attribute now, defined before anything can call it and set from the
+CONFIG cell.
+
+### Figure formatting
+
+The Δν colourbar was unreadable: the shift runs to ±160 000 Hz, and nine ticks of
+six digits collided with each other, with the panel letter and with the title.
+Fixed by scaling the data rather than shrinking the text — an automatic Hz/kHz/MHz
+choice, `MaxNLocator(5)` on the linear bar and `LogLocator(numticks=4)` on the log
+one, a wider gutter between columns, and the panel letters moved clear.
+
+### Caveat
+
+`OSHIFT = 5` changes the plant's output level by 12 dB relative to Stages 8, 9
+and 11, which still use 7. Any feedback setting carried between notebooks needs
+rescaling by the same 12 dB or re-deriving. Noted in the cell.
+
+---
+
+## 2026-08-04 — Stage 15 searched 20 MHz for a resonator that was switched off
+
+Steps 1, 2 and 3 all failed, and Step 4 then measured the same resonator to 0.3%
+at Q = 300 and Q = 1000. Both facts are correct, and together they name the fault.
+
+### Fault 1 — the plant was never enabled
+
+Step 4 configures and **enables** the digital resonator before measuring it:
+
+```python
+reso.config(F0, q_true)
+reso.noise_tank(TANK_SH); reso.noise_out(None)
+reso.enable(); reso.clear()
+```
+
+Steps 1 to 3 did not, and nothing else in the notebook does either. In emulation
+there is no coil on the bench — the thing to be found *is* the digital resonator,
+and the top level only substitutes it for the converter when `reso_ena` is set:
+
+```systemverilog
+assign adc_dat_ps[0] = reso_ena ? reso_dat : adc_dat[0];
+```
+
+So the search swept 30–50 MHz across a terminated input, 2501 points of it. The
+answers were all correct answers to the question actually being asked:
+
+| reported | what it means |
+|---|---|
+| *"strongest point 0.9 dB above the median"* | the noise floor is flat |
+| bracket edges 0.21/0.70, 0.05/1.00, 0.63/0.41 … | random, because there is no peak to bracket |
+| *"the line is wider than the search band"* | after 10 doublings, still no line |
+
+The line also has to be **driven**. A resonator with no drive has nothing to
+resonate: it is found as a bump in the noise, which is what `noise_sweep()`
+downstream measures. So the tank noise has to be on before the search starts, not
+only during the Step 4 self-check.
+
+**This is the third instance of this exact fault** — Stage 13 Step 3 was the same
+shape two entries ago. A measurement step that assumes a signal source nothing in
+the notebook ever turns on.
+
+Fixed: Step 1 now sets the plant up first, gated on `EMULATION`, and prints what it
+enabled. With `EMULATION = False` it explicitly disables the resonator instead,
+because then the plant really is out on the bench.
+
+### Fault 2 — `capture()` raced the memory writer
+
+The `RuntimeError: unwritten words in the record` is not a transport fault. The
+record was read a few hundred microseconds early.
+
+```python
+time.sleep(n_samples * (1 << dec_log2) / FS_CLK + 0.005)
+acq.w(0x00, 1)                    # disarm
+...
+got = min(int(acq.r(0x34)), n_samples)
+```
+
+Two things wrong, and they compound:
+
+1. **`DMA_COUNT` was not consulted until after the decision to stop had been
+   made.** The sleep was a guess with no verification attached to it.
+2. **`DMA_COUNT` reports samples handed *to* the memory writer, not samples that
+   have landed in DDR.** The writer bursts, so the final burst can still be in
+   flight when the count already reads complete.
+
+A fixed 5 ms of margin is also the wrong shape: 30% of a short record, 0.1% of a
+long one. That is why this appeared as a rare, load-dependent failure that looked
+like hardware — it surfaced here only because Stage 15 fires 2501 short captures
+back to back, which is the worst case for it.
+
+Now polls `DMA_COUNT` to completion with a 0.5 s deadline, lets the last burst
+land, and — if poison is still found — **retries the read once** before raising. A
+word inside the writer's burst buffer is not a lost word; if it is genuinely lost
+it will still be poison in 20 ms. The single-shot check could not tell those apart
+and reported a transport fault for both.
+
+Verified against a simulated late burst:
+
+| scenario | old | new |
+|---|---|---|
+| burst 0.5 ms late (the observed race) | RuntimeError | ok |
+| burst 10 ms late | RuntimeError | ok |
+| genuinely lost | RuntimeError | RuntimeError |
+
+`capture()` was **byte-identical across ten notebooks** (Stages 9 through 17), so
+the race was in all of them and the fix is applied to all ten.
+
+### Noted, not changed
+
+`STATUS2` bit 0 — *memory overflow, SAMPLES WERE LOST* — is still not checked;
+`capture()` only tests bit 3, the write-error flag. A capture can therefore lose
+samples silently. Left alone deliberately: it needs a board to confirm the bit is
+not sticky across arm cycles, and a false positive here would block every stage.
+Worth doing with hardware to hand.
+
+---
+
+## 2026-08-04 — The atlas gain axis was already at the actuator ceiling
+
+Asked to widen the sweep so more of the self-oscillating region appears. It cannot
+be widened, and it is worth writing down why.
+
+### The ceiling
+
+The phase shifter's coefficients are signed **Q2.14** (`DWC = 16`,
+`red_pitaya_phaseshift.v`), so the largest representable A is **1.99994 = +6.02 dB**.
+`GAINS_DB` already ended at +6.00 dB. Stage 10's own Step 5 knew this —
+`A_MAX = 1.99  # A*16384 = 32604, just inside int16` — but two other messages in
+the same notebook advised *"Raise the top of GAINS_DB and rerun"* and *"Extend
+GAINS_DB upward before operating anywhere"*, which is advice that cannot be
+followed. Both corrected to say what to change instead: plant Q, resonator output
+shift, or the coefficient format in RTL.
+
+### What was actually wrong with the picture
+
+Onset is near A = 1.4 (+3 dB) and the ceiling is +6 dB, so the unstable band is
+about **3 dB wide** — bounded by physics, not by the axis. At the old uniform 2 dB
+step that is **two rows**, which is why it drew as a sliver rather than a region.
+
+So the band is not being enlarged. It is being **resolved**, by spending the sample
+budget where the behaviour changes:
+
+| range | step | reason |
+|---|---|---|
+| −26 to 0 dB | 2.0 dB | far from onset, nothing moves quickly |
+| 0 to +6 dB | 0.5 dB | through onset and up to the ceiling |
+
+**7 rows inside the unstable band instead of 2.** 26 × 24 = 624 points, about 10
+minutes against the previous 7.
+
+### The trap that came with it
+
+A non-uniform axis breaks `imshow`, which the heatmaps used with
+`extent=[...]` — that assumes evenly spaced rows. It would have drawn the 0.5 dB
+rows stretched to the same height as the 2 dB ones, silently, producing a
+completely wrong map that looked entirely reasonable. Switched to `pcolormesh`
+with explicit cell edges (`_edges()`), which handles uneven spacing correctly.
+
+Verified by rendering the new axis with synthetic data
+(`results/axis_rendering_check_SYNTHETIC.png`): the fine rows above 0 dB draw at
+their true spacing and the oscillating lobe resolves into a shape rather than a
+line. Synthetic — it checks the axis arithmetic, not the physics.
+
+### The atlas now draws in the paper's format
+
+Laid out as Herkenhoff *et al.* Fig. 9: two columns, `Q` left and `Δν_res` right.
+Each is a heatmap over (feedback phase, feedback gain) with a **horizontal
+colourbar above it**, and beneath it a panel of line cuts at three gains, drawn in
+the same colours as the dashed lines marking those gains on the map. The phase axis
+is shared and labelled once, at the bottom, in degrees from −180° to 180°.
+
+Three deliberate departures, all recorded in the cell:
+
+- **Phase is drawn relative to `PHI_N`.** The paper puts the narrowing phase at 0°;
+  on this board that phase is `PHI_N`, so the axis is referred to it. Set
+  `PHASE_REF = 0.0` for raw phase.
+- **The gain axis runs to +6 dB, not −10 dB.** That is this board's actuator
+  ceiling, not a choice.
+- **White rings are kept**, marking points too loud to be a linear measurement. The
+  paper has no equivalent. Dropping a validity warning to match someone else's
+  figure would be a poor trade — especially in a session that has spent this much
+  time on tests that looked fine and were not.
+
+`T_eff/T0` is not in the paper, so it keeps its own panel rather than being forced
+into a layout designed for two quantities.
+
+### Two bugs caught while building it, both by checks rather than by eye
+
+**A forward reference.** `PHASE_REF = PHI_N` looked right and would have crashed
+the notebook on a clean top-to-bottom run: `PHI_N` is not assigned until code cell
+8, and this is code cell 5. `verify_notebooks.py` reported *"cell 4: 'PHI_N' is
+used before anything defines it"* — the same class of fault as the `logic`
+declarations in `red_pitaya_top.sv` earlier this week, and caught the same way.
+The narrowing phase is now derived from the atlas that has just been measured, so
+it cannot go stale or run early.
+
+**A biased derivation.** The first derivation took a median down each phase column
+and picked the largest. Tested against synthetic data with a known narrowing phase
+of 210°, it returned **165°**. The reason is worth keeping: the columns nearest the
+narrowing phase are the ones that oscillate first, so they hold the most missing
+entries, and their median is computed over fewer and lower-gain samples — biasing
+the answer *away* from the very phase being looked for. Reading the peak off the
+highest fully stable gain row has no such bias and returns 210°.
+
+That one would have produced a figure that looked entirely reasonable, with the
+phase axis silently offset by 45°.
+
+### One rendering trap
+
+Phase is periodic, so the column at −180° is also the column at +180°. Without
+repeating it the map stops at the last sampled point — +165° at 15° steps — and the
+unfilled strip beyond draws as **a black stripe up the right-hand edge**, which
+reads as a band of self-oscillation that is not there. `_phase_axis()` closes the
+axis explicitly. It was caught by looking at the render, not by any check.
+
+`set_title(..., pad=)` is matplotlib ≥ 2.0; the board may be older, and this
+notebook already carries shims for that era. The colourbar label with its axis
+moved to the top gives identical placement on every version, so that is what is
+used.
+
+Verified by executing the notebook's own cell against synthetic arrays of the right
+shape — it runs clean and produces both figures
+(`results/paper_format_check_SYNTHETIC.png`). Synthetic: it checks the layout and
+the axis arithmetic, not the physics.
+
+---
+
+## 2026-08-03 — Stage 13 Step 1: it told us to turn down the gain on a terminated input
+
+```
+source: bench: input terminated
+  rms                     1.2337e+04 counts
+  largest sample          3.9836e+04 counts
+  headroom to full scale  -13.7 dB
+  samples near full scale 5268 of 8192
+  peak/average            3.23   (pure noise gives about 3.00)
+  TOO LOUD - reduce the gain ahead of the converter before measuring.
+```
+
+Nothing was connected to the input. There was no gain to reduce.
+
+### The record contradicted itself, and that is what gave it away
+
+Two numbers from the *same* 8192 samples:
+
+- **5268 of 8192 samples near full scale** — 64% of the record pinned at the rail
+- **peak/average 3.23**, against the 3.00 expected of pure noise
+
+Both cannot be true. A signal with 64% of its samples at full scale has a crest
+factor of about 1. A crest factor of 3.23 is healthy, unclipped noise, sitting a
+touch above the textbook figure. The clipping metric was wrong; the linearity
+metric beside it was fine and was quietly saying so.
+
+### The fault: a full-scale reference from the wrong end of the chain
+
+```python
+FULL_SCALE = float(1 << 13)      # 14-bit signed converter
+```
+
+That is the **converter's** full scale. But `capture()` reads the **CIC output**,
+which is roughly 96 dB further up the chain. The threshold for "near full scale"
+came out at 8028 — *below* the record's own rms of 12337 — so most samples tripped
+it, and the headroom figure was the ratio of two quantities in different units.
+
+The correct value follows from the RTL headers, which state every step:
+
+| stage | peak | source |
+|---|---|---|
+| ADC full-scale sine | 2²³ → `2^13` | 14-bit signed |
+| local oscillator | `2^15` | `DWL = 16` |
+| raw product | `2^28` | |
+| mixer, `>> SHIFT = 6` | `2^22` | `red_pitaya_acq_mixer.v` |
+| baseband term after the CIC drops the sum term | `2^21` | `cos·cos = ½cos(Δ) + ½cos(Σ)` |
+| CIC output — input scale plus 8 bits | **`2^29`** | `red_pitaya_acq_cic.v` |
+
+So `|z|` for a full-scale sine at the converter is **2²⁹**, and it does not move
+with decimation — the CIC's output slice tracks R exactly so the scale stays put,
+which is the whole reason R is restricted to powers of two.
+
+Checked against the reported numbers: the old reference gives −13.7 dB and 5268
+samples, reproducing the failure exactly. The corrected one gives **+82.6 dB of
+headroom and 0 samples near full scale** — which is what a terminated input should
+look like, and Step 1 passes.
+
+### FIX 13
+
+`FULL_SCALE = float(1 << 29)`, with the derivation written out beside it, and
+`ADC_FULL_SCALE` kept separately for when the converter itself is meant. Noted
+there: the FIR droop corrector downstream has a DC gain of 1.02 to 1.3, so the true
+clip point is up to 2.3 dB below this — comfortably inside the 6 dB
+`MIN_HEADROOM_DB` already required.
+
+Step 3's loopback tone was checked against the corrected reference at the same
+time: `amp 0.15` gives `|z| = 8.05e7`, **16.5 dB below full scale**. No clipping.
+
+### Two failures, one habit
+
+Both Stage 13 failures this session were the test misjudging a healthy instrument,
+and in both the test asserted a diagnosis it had not earned — *"reduce the gain
+ahead of the converter"*, *"a scaling error in exactly one of them"*. Neither was
+true. A measurement compared against a constant is only as good as the constant,
+and a units error between two ends of a signal chain looks exactly like a fault at
+whichever end you were already suspicious of.
+
+---
+
+## 2026-08-03 — Stage 13 Step 3: the paths did not disagree. There was nothing for them to agree about
+
+```
+memory capture             1.2417e+04     1.000
+register voltmeter         1.7146e+03     0.138
+averaged spectrum          1.2556e+04     1.011
+largest ratio between any two paths: 7.323
+```
+
+Read as "one path has a scaling error", which is what the step's own message
+says. It was not a scaling error. Two separate faults, neither in the instrument.
+
+### Fault 1 — the tone never reached the converter
+
+The top level builds the converter word like this:
+
+```systemverilog
+assign adc_dat[0]    = digital_loop ? dac_a    : <the real converter>;
+assign adc_dat_ps[0] = reso_ena     ? reso_dat : adc_dat[0];
+```
+
+and the acquisition taps `adc_dat_ps`. Step 3 started the generator and tuned the
+acquisition — but with `SOURCE_NOTE = 'bench: input terminated'`, `digital_loop`
+off, and the resonator never enabled anywhere in the notebook, **there was no path
+from the generator to the acquisition at all.** The tone existed; it had nowhere to
+go. All three paths measured the noise floor of a terminated input.
+
+In emulation the resonator is the only other way in — the top level feeds it
+`dac_a` and substitutes its output for the ADC — which is how Stages 8 to 11 got
+signal. Stage 13 does not enable it. Nothing in the notebook ever did.
+
+### Fault 2 — the three paths were two paths, measuring different things
+
+The register voltmeter returns `|mean(z)|`: a **coherent** average, which cancels
+everything not at the tuned frequency. The other two returned
+`sqrt(mean(|z|²))`: **total power**, which cancels nothing. On a clean on-tune tone
+these agree. On noise they differ by the square root of the number of samples
+averaged — which is precisely what was seen.
+
+Simulating pure noise through the actual read timing (software-paced register
+reads at roughly 1.3 µs a pair, against a CIC output that updates every 8.192 µs at
+`DEC_CHK = 10`, so consecutive reads repeat the same sample) predicts a ratio of
+**0.124 to 0.156**. Observed: **0.138**. The number was not evidence of a fault; it
+was the correct answer to "what happens if you coherently average noise".
+
+And the third path was never independent. By Parseval the spectrum figure *is* the
+record's mean square computed a second way, from the same 8192 samples. It agreed
+with the capture to 1.1% because it could hardly do otherwise. Two paths were being
+presented as three, and the one genuinely independent comparison — registers
+against memory — was being made between incompatible estimators.
+
+### FIX 12 — give it a signal, and compare like with like
+
+Step 3 now enables the internal loopback (house keeping 0x0C bit 0) for the
+duration of the test and restores it afterwards. That is the right source for a
+scaling cross-check: unity gain, no cable, no resonance, no analogue, nothing to
+calibrate.
+
+The comparison is now between matched estimators:
+
+| pair | quantity | what it actually tests |
+|---|---|---|
+| register voltmeter vs memory capture | coherent `\|mean z\|` | the peek registers against the memory writer — the one comparison that was wanted |
+| memory capture vs averaged spectrum | power `sqrt(mean\|z\|²)` | the spectrum normalisation, from one record |
+
+It also reports the **tone fraction** `|mean z| / rms(z)`. Near 1 means a clean
+tone; near 0 means there is nothing there, and the step now says *"NO TONE ... the
+paths below are being asked to agree about something that is not there"* instead of
+blaming a scaling error.
+
+### The lesson
+
+The failure message asserted its own diagnosis — *"That is a scaling error in
+exactly one of them, and the ratios above say which"* — and it was wrong on both
+counts. There was no scaling error, and the ratios pointed at the path that was
+behaving correctly. A test that names the fault it has found is only as good as the
+assumption behind the naming; when that assumption fails, a confident wrong answer
+is worse than a bare number.
+
+---
+
+## 2026-08-03 — Stage 11 Steps 1 and 2 fail: every parameter set was written one slot too high
+
+With the sequencer finally on the board, Steps 0 and 3 passed and Steps 1 and 2
+failed. One line of RTL explains both.
+
+### The fault
+
+```systemverilog
+wire [SW-1:0] a_set = sys_addr[SW+3:4];     // bits [6:4]
+```
+
+Bits [6:4] of an address are *address ÷ 16*. But the sets **start at 0x10**, not
+at 0. So the decode never subtracted the base:
+
+| software asks for | address | decoded as |
+|---|---|---|
+| set 0 | 0x10 | set 1 |
+| set 1 | 0x20 | set 2 |
+| … | … | … |
+| set 6 | 0x70 | set 7 |
+| set 7 | 0x80 | **set 0** |
+
+Every set landed one slot high, and the top one wrapped onto the bottom one. All
+eight were wrong.
+
+### Why that produced these two symptoms and not others
+
+The state machine starts at set 0 and reads `mem_dur[0]` — which software had
+never actually written, so it was still zero from reset. **A duration of zero
+means "wait for a trigger."** With no trigger enabled, the sequence sat at set 0
+for ever.
+
+- **Step 2** saw that directly: `set 0, running True, done False` at 200 ms and
+  again at 400 ms. It was waiting for a trigger nobody had asked for.
+- **Step 1** saw the consequence. The coefficients never left `mem_ci[0]` and
+  `mem_cq[0]`, both zero, so nothing ever switched. Its FFT went looking for the
+  strongest line in the envelope of a noise-driven resonator and found noise —
+  hence 112.8 µs, 70.2 µs, 186.0 µs, 91.4 µs, four numbers with no relation to
+  what was programmed or to each other. That scatter was the tell: a wrong
+  divisor gives a wrong answer, but a *consistent* one.
+- **Step 0 passed**, and could not have failed — see below.
+- **Step 3 passed** because it does not depend on which slot a set lands in.
+
+### FIX 11 — subtract the base before decoding
+
+```systemverilog
+localparam [19:0] SET_BASE = 20'h10;
+wire [19:0]   a_off = sys_addr[19:0] - SET_BASE;
+wire [SW-1:0] a_set = a_off[SW+3:4];
+```
+
+`a_word` is unchanged and was always correct: 0x10 is a multiple of 16, so the low
+bits are unaffected by the offset.
+
+Modelled against the notebook's exact register writes: Step 2a now waits at set 1
+as intended, and Step 1's four periods come out at 200.008, 500.016, 1000.016 and
+2000.016 µs — errors of 0.004% and below, against a 2% tolerance. The residual two
+clocks per cycle are the state machine's load-and-compare overhead, as designed.
+
+### The part worth keeping: why Step 0 could never have caught this
+
+Step 0 writes set 3, reads set 3 back, and checks the values match. It passed
+throughout. It would pass no matter how badly the index were decoded, **because
+reads use the same decode as writes** — both went to slot 4 and agreed with each
+other. The bus was perfectly self-consistent. It had simply relabelled every set.
+
+A read-back test cannot see an error applied identically in both directions. It
+proves the memory holds what it was given; it says nothing about whether it was
+given the right address.
+
+My first attempt at hardening this was to write a different value to all eight
+sets and check for aliasing. Simulated against both decodes, **it passed on the
+broken one too** — for exactly the same reason. A relabelling is invisible to any
+test that only ever goes through the relabelling.
+
+What breaks the symmetry is the state machine: it reads `mem[cur]` by index and
+never touches the bus decode. So Step 0 now **runs a two-set sequence and checks
+where it stops** — programmed under software control so it disturbs nothing.
+Verified against both decodes:
+
+| decode | result | verdict |
+|---|---|---|
+| old (buggy) | `set 0, running, not done` | **FAILS** |
+| new (fixed) | `set 1, stopped, done` | passes |
+
+The general lesson, and the one that cost the most here: a test that exercises a
+translation in both directions cannot detect a fault in that translation. Somewhere
+in the loop there has to be a party that did not read the same map.
+
+---
+
+## 2026-08-03 — The zero was a STUB answering. The board was never running the new bitstream
+
+Stage 11 Step 0 read `0x00000000` from slot 7 again, after a rebuild, with Stages 8
+and 9 passing and `check_system.py` reporting no issues. Every one of those
+reassurances was empty, and the previous entry's explanation was wrong.
+
+### Correcting the previous entry
+
+The entry below blamed the timing failure for the zero reads. **That was wrong.**
+Stages 8 and 9 pass on this board, which they could not do if the fabric were
+mis-latching. The timing failure is real, is still there, and still has to be
+fixed — but it was not what Step 0 was reporting. Diagnosing two faults as one is
+how the second one hides.
+
+### What was actually happening
+
+An unused bus slot is filled by `sys_bus_stub`, which is three lines:
+
+```systemverilog
+assign bus.ack   = 1'b1;
+assign bus.err   = 1'b1;
+assign bus.rdata = 'x;      // synthesises to constant zero
+```
+
+It **acknowledges the read and returns zero, instantly and without error.** From
+software, a stubbed slot and a module whose version register reads zero are
+indistinguishable. Before the sequencer existed, slot 7 held exactly this stub.
+
+So `0x00000000` from slot 7 was not a broken sequencer, or a timing casualty. It
+was the *old bitstream's stub*, answering correctly. The board was still running a
+build from before the sequencer was added — and Stages 8 and 9 passed on it because
+neither touches slot 7.
+
+### Why nothing caught it — four silent failures in a row
+
+| # | What happened | Why it was silent |
+|---|---|---|
+| 1 | `bitstream_id.txt` was never written | The build did not run through `build_project.tcl` to STEP 4. Vivado's GUI *Generate Bitstream* does not write it |
+| 2 | `run_on_board.ps1` did not copy it | Line 159 guards with `Test-Path` and skips missing files without a word |
+| 3 | `check_system.py` found no file to compare against | `expected` stayed `None`, the comparison was skipped, and control fell through to **"OK, build fingerprint 0x…"** |
+| 4 | Stages 8 and 9 passed | Neither reads slot 7 |
+
+Step 3 is the one that did the damage. The script announced success for a check it
+had not performed. **"I could not check" and "I checked and it is fine" must never
+look the same** — and here they were the same sentence.
+
+That is the second time this file has been the problem: the entry below records
+that its fingerprint comparison had never once worked, because it compared the
+whole file, comments included, against an 8-character hex string. Fixing that
+exposed this deeper hole underneath it.
+
+### FIX 7 — `check_system.py` cannot report OK for a check it did not run
+
+When `bitstream_id.txt` is absent it now says so, in plain terms: the bitstream
+could not be verified, this is not an all-clear, here is what to copy across and
+why the file may not exist.
+
+### FIX 8 — ask the modules directly, instead of asking a file about them
+
+A fingerprint answers "does the chip match a file on the PC" — useless when the
+file is missing, and silent about *which modules the design contains*.
+`check_system.py` now reads each custom module's version register and reports it by
+name. For the sequencer: slot 7 offset 0x0C must return `0x5E900001`.
+
+A version register is the only honest presence test, because a stub cannot fake
+one. Had this existed, the very first run would have said *"The parameter sequencer
+is NOT in this bitstream — the slot is still a stub, so this build predates the
+module"*, instead of "OK".
+
+### FIX 9 — the fingerprint file is written the moment a bitstream exists
+
+`build_project.tcl` wrote it only in STEP 4, so when STEP 4 did not complete the
+file did not exist at all — and its absence was read downstream as consent. It is
+now written immediately after implementation, stamped `timing: NOT YET CHECKED`,
+and rewritten in STEP 4 with the real verdict. A file that exists and says
+"unverified" is worth far more than a missing one.
+
+### FIX 10 — the root cause of all four: one Tcl option that does not exist
+
+Found when the Tcl console finally showed it:
+
+```
+ERROR: [Common 17-170] Unknown option '-slack_lessthan',
+       please type 'get_timing_paths -help' for usage info.
+```
+
+`build_project.tcl` STEP 4 counted failing endpoints with
+`get_timing_paths ... -slack_lessthan 0`. **There is no such option.** An ERROR in
+a sourced Tcl script aborts it — so STEP 4 has never once run to completion on this
+project.
+
+That single wrong word is the origin of everything above:
+
+- no timing verdict was ever printed, which is why a design failing by 7 ns went
+  unnoticed through Stages 8, 9 and 10
+- STEP 5 never ran, so its "NEXT STEPS" and the fix that made it refuse a bad
+  build were both unreachable
+- once the fingerprint write was moved into STEP 4, `bitstream_id.txt` stopped
+  being written — which is what let a stale bitstream sit on the board while
+  `check_system.py` reported no issues
+
+The build still produced a working bitstream every time, which is exactly what made
+it invisible: the part that succeeded was loud, and the part that died was silent.
+
+Replaced with options that exist in every Vivado version — fetch the worst paths
+and count the negative ones in Tcl. The whole measurement is now wrapped in
+`catch`, and a build whose timing **cannot** be measured is treated as failing, not
+passing. An unchecked build and a good build must not look the same.
+
+### What to do now
+
+1. Rebuild with `source C:/rp/prj/v0.94/Test_Project/build_project.tcl` — **not**
+   the GUI button, which writes no fingerprint. This will print a real timing
+   verdict for the first time.
+2. Load it following `BITSTREAM_WORKFLOW.pdf` Workflow A. The `md5sum` in step A4
+   is the step that proves the file arrived; it is not optional here.
+3. Run `sudo python3 check_system.py`. It must now say *"The parameter sequencer is
+   present (version 0x5E900001)"*. Anything else, including any "could not be
+   verified" warning, means stop.
+
+### Still outstanding, and not to be confused with the above
+
+The build still misses timing: **WNS −7.141 ns, 6845 failing endpoints**, all in
+the resonator's recursive loop. FIX 4's saturation change did not move it
+materially. Stages 8 and 9 passing is *not* evidence against this — a design that
+misses timing can pass tests for a long time and then produce a wrong number on a
+warm afternoon. That work is unfinished.
+
+---
+
+## 2026-08-03 — Stage 11 Step 1 reads zero. The sequencer is present; the build fails timing by 6.8 ns
+
+Step 1 stopped with `sequencer version register: 0x00000000` and *"THIS BITSTREAM HAS
+NO SEQUENCER"*. The message names the wrong culprit. The sequencer is in the
+bitstream. The bitstream is broken.
+
+### The sequencer is there — proved twice
+
+| Evidence | What it shows |
+|---|---|
+| `synth_1/runme.log:292` | `synthesizing module 'red_pitaya_sequencer'`, with `VERSION bound to: 1586495489` — that is 0x5E900001, the value Step 1 was looking for |
+| `synth_1/red_pitaya_top.tcl:122` | the file is in the list Vivado actually compiles |
+| `impl_1/..._timing_summary_routed.rpt` | real placed-and-routed cells: `i_seq/mem_dur_reg[1][30]` at `SLICE_X0Y53` |
+
+So the previous two fixes worked. The module was synthesised, placed and routed.
+
+### What is actually wrong
+
+```
+CRITICAL WARNING: [Timing 38-282] The design failed to meet the timing requirements.
+
+WNS  -6.799 ns      TNS  -6536.272 ns      Failing endpoints  6224 of 29573
+```
+
+**The build misses timing by 6.799 ns on an 8 ns clock** — the slowest path needs
+14.7 ns, nearly two clock periods.
+
+> **Superseded — see the entry above (2026-08-03, "The zero was a STUB").** The
+> paragraph that followed here argued that the timing failure explained the zero
+> reads. It did not. The zero was an old bitstream's `sys_bus_stub` answering
+> slot 7, and Stages 8 and 9 pass on this board, which rules out mis-latching
+> fabric. The timing failure below is real and still unfixed; it was simply not
+> the fault being reported. Two faults, diagnosed as one.
+
+Every one of the ten worst paths is inside `i_reso` — the digital resonator.
+
+### The critical path, and why it is that long
+
+`i_reso/v_reg[17]` → DSP48E1 → LUT1 → **18 CARRY4 levels** → LUT4 → `i_reso/u_reg[15]`
+
+| Stage | Delay |
+|---|---|
+| Unregistered DSP multiply (`Prop_dsp48e1_A[17]_P[1]`) | 3.841 ns |
+| Two carry chains in series — the adder, then the saturation comparison | ~8.6 ns |
+| Routing | 4.314 ns |
+| **Total data path** | **14.695 ns** |
+
+The resonator is recursive: the whole multiply-add must close in one clock and
+cannot be pipelined. `red_pitaya_resonator.v`'s own header says so, and warns
+"IF YOU WIDEN THESE, CHECK THE TIMING REPORT — do not assume."
+
+**That check was never done.** The 2026-07-30 entry that added the resonator ends
+"*Not yet built. Needs one rebuild, and the timing report needs checking — the
+resonator's recursive loop is the one path where that is not a formality.*" The
+last clean timing recorded anywhere in this log is **+0.248 ns over 27338
+endpoints, on 2026-07-29** — before the resonator existed. Every measurement taken
+through the resonator since, Stage 8 and Stage 10 included, was taken through a
+design whose timing had never been verified.
+
+### FIX 4 — saturation from two bits instead of two comparisons
+
+Applied, and it is **bit-for-bit behaviour-preserving**: same values into `u` and
+`v`, same clip flag, no change to coefficient scaling, physics or software.
+
+The old form asked `u_nxt > SAT_HI` and `u_nxt < SAT_LO`. Each is a 26-bit
+magnitude comparison, which Vivado builds as a carry chain — placed *after* the
+adder's own carry chain, both inside the recursion.
+
+But `SAT_HI` and `SAT_LO` are exactly the largest and smallest values 25 bits can
+hold, so "does it fit" is precisely "are the top two bits equal" — one XOR:
+
+| `u_nxt[25]` | `u_nxt[24]` | meaning |
+|---|---|---|
+| 0 | 0 | fits, positive |
+| 0 | 1 | overflowed positive → `SAT_HI` |
+| 1 | 0 | overflowed negative → `SAT_LO` |
+| 1 | 1 | fits, negative |
+
+Verified by exhaustive comparison of both forms across the entire signed range at
+reduced widths, and boundaries plus 400,000 random values at the real width: zero
+mismatches.
+
+**This is necessary but not sufficient.** It removes one of the two carry chains,
+perhaps 3–4 ns. The unregistered DSP multiply alone is 3.8 ns, and routing another
+4.3 ns. Closing the remaining gap means changing widths or restructuring the
+recursion — decisions that change the emulated plant's calibration, so they are
+not being made unilaterally here.
+
+### FIX 5 — the build script told us to load a bitstream it had just condemned
+
+This is the process failure, and it is the one that cost the afternoon.
+
+`build_project.tcl` STEP 4 detected the timing failure correctly and printed
+*"Do not trust measurements from this build."* Then STEP 5 printed:
+
+```
+  NEXT STEPS
+    1. Copy it to the board...
+```
+
+The FAIL scrolled past; the confident instruction was at the bottom, where the eye
+lands. Fixed: when timing fails, STEP 5 now leads with **DO NOT LOAD THIS
+BITSTREAM**, explains that the symptom is *not* a clean failure — "registers
+reading zero, or values that change when nothing changed, or numbers that look
+plausible and are wrong" — and points at the resonator note. The verdict is now the
+last thing on screen.
+
+`bitstream_id.txt` was also being written in STEP 3, *before* timing was checked,
+so a condemned build still got a clean-looking identity. It is now written after
+the verdict and records it.
+
+### FIX 6 — the stale-bitstream check has never once worked
+
+Found while wiring up the above. `check_system.py` read the fingerprint file with:
+
+```python
+expected = open(cand).read().strip().upper().replace('0X', '')
+```
+
+`.read()` takes the **whole file** — the fingerprint *and* every `#` comment line
+under it — then compares that to an 8-character hex string. It can never match.
+
+This is the project's main defence against a stale bitstream, the thing built
+after the 2026-07-29 afternoon was lost to exactly that fault, and it has been
+reporting "the chip is running DIFFERENT logic from your source" on every run,
+including builds that were perfectly current. A check that always cries wolf is
+worse than none: it teaches you to scroll past the one message that would have
+caught the real thing.
+
+Now reads the first non-comment line, and additionally reports **PROBLEM** when the
+fingerprint matches but the build failed timing — because a matching fingerprint
+proves the board runs what was built, not that what was built works.
+
+### Where this leaves Stage 11
+
+The sequencer is correct and is in the design. Nothing in Step 1's output is
+evidence against it. But no measurement from this bitstream means anything, and
+that includes the Stage 10 atlas if it was taken through the resonator on a build
+that had never had its timing checked — which, on the evidence above, it was.
+
+---
+
+## 2026-08-03 — Second pass: the same ten errors, because a hand-edited .xpr does not survive Vivado
+
+The identical failure came back, with one telling difference — the line numbers had
+moved, from 333/342 to 612/621. That is the signature of a half-applied fix: the
+`red_pitaya_top.sv` change (FIX 2 below) had taken, because a text file edited on
+disk is a text file Vivado re-reads. The project-file change (FIX 1 below) had not.
+
+### Why the first repair evaporated
+
+`Test_Project.xpr` was edited directly while Vivado had the project open. Vivado does
+not re-read that file — it holds the source list in memory and writes it back on
+save. Timestamps confirm it: the edit went in, Vivado saved over it minutes later,
+and the entry was gone. The generated synthesis script
+`Test_Project.runs/synth_1/red_pitaya_top.tcl` listed every custom module except the
+sequencer, which is the list Vivado actually compiles from.
+
+This is the same failure mode already recorded on 2026-07-29, when a source file was
+edited behind an open Vivado and the build silently used the previous day's netlist.
+Same lesson, different file: **while Vivado is open, it owns the project file.**
+
+### FIX 1 (properly, this time) — the sequencer added where the fix is permanent
+
+`acquisition_custom/add_acquisition_sources.tcl` is the script `build_project.tcl`
+runs as STEP 2, and it is the project's real source-of-truth for "which custom files
+must be in Vivado". `red_pitaya_sequencer.v` was missing from its `acq_files` list —
+that is the actual defect, and the hand-edited `.xpr` was only ever a symptom patch.
+
+Added there. It is version-controlled, it re-applies itself on every build, and it
+survives the project being deleted and recreated, which a hand-edited `.xpr` does not.
+
+### FIX 3 — a check so this cannot reach synthesis again
+
+The same script now scans `red_pitaya_top.sv` for every module it instantiates and
+confirms each one is genuinely declared in a file the project contains. If one is
+not, it prints the name, says whether the file exists on disk, names the list to add
+it to, and **aborts** — before the 15-to-25-minute build rather than after it.
+
+Nothing already in the project could have caught this:
+
+| Check | What it reads | Why it missed this |
+|---|---|---|
+| Build fingerprint | files on disk | hashed the sequencer, so the build ID *changed* — it looked included |
+| `tools/verify_rtl.py` | the source tree | ports and names all matched, because the file was there |
+| **New check** | **the Vivado project** | **asks whether Vivado knows about the file** |
+
+The first two answer "does the file exist". The question that mattered was "does the
+toolchain read it".
+
+Two details found while testing it, both fixed:
+
+- Matching module and instance names with `\s*` between them let the pattern split
+  `if (` into a module `i` and an instance `f`, then report a missing module called
+  `i`. The separator must be `\s+`.
+- Checking module names against *filenames* is guesswork — several files here hold
+  more than one module. It now reads each project file and looks for the actual
+  `module` / `interface` declaration.
+
+Verified both ways: with the sequencer in the project it reports
+`all 13 instantiated module(s) found`; with it removed it aborts with the correct
+diagnosis and a non-zero error.
+
+### To apply it
+
+In the Vivado Tcl Console, with the project open:
+
+```
+source C:/rp/prj/v0.94/Test_Project/build_project.tcl
+```
+
+That runs the corrected STEP 2, so the sequencer is added, the new check runs, and
+the build proceeds. To add the file without a full rebuild:
+
+```
+source C:/rp/prj/v0.94/Test_Project/acquisition_custom/add_acquisition_sources.tcl
+reset_run synth_1
+launch_runs synth_1 -jobs 4
+```
+
+`reset_run` matters — synth_1 is still holding its failed state.
+
+---
+
+## 2026-08-03 — Stage 11 synthesis failure: the module was written but never added to the project
+
+The sequencer build failed at synthesis with ten errors. All ten came from two
+causes, and neither was in the sequencer's logic — the module itself is sound.
+
+### What Vivado reported
+
+```
+[Synth 8-439]  module 'red_pitaya_sequencer' not found        red_pitaya_top.sv:333
+[Synth 8-6038] cannot resolve hierarchical name for 'addr'    red_pitaya_top.sv:342  (+6 more)
+[Synth 8-6156] failed synthesizing module 'red_pitaya_top'    red_pitaya_top.sv:52
+[Common 17-69] Command failed: Synthesis failed
+[Common 17-69] Command failed: Run 'impl_1' has not been launched
+```
+
+Only the first is a real fault. The seven `8-6038` errors are the seven `sys[7].*`
+connections on an instance whose module could not be found: with no port list to
+match against, Vivado cannot resolve `.addr` on the interface and complains once per
+port. `8-6156` is the top-level giving up, and the `impl_1` message is implementation
+refusing to start after synthesis never produced a netlist. Fix the first error and
+the other nine go with it — which is why the count is misleading and the line numbers
+are worth reading before the totals.
+
+### FIX 1 — `red_pitaya_sequencer.v` was never added to the Vivado project
+
+The file was written, committed, and added to `build_project.tcl`'s fingerprint list,
+so every check that reads the *repository* said it was present. But `Test_Project.xpr`
+— the list Vivado actually synthesises from — never gained an entry for it. Writing a
+file into `rtl/classic/` does not put it in the project; Vivado only compiles what its
+own source set names. `red_pitaya_resonator.v` and the six `red_pitaya_acq*.v` files
+each had an entry; this one did not.
+
+Added to the `sources_1` fileset in `Test_Project.xpr`, marked `UsedIn` synthesis,
+implementation and simulation, alongside the other custom modules.
+
+> **This fix did not hold — see the entry above for 2026-08-03 (second pass).**
+> Editing `Test_Project.xpr` by hand while Vivado has the project open achieves
+> nothing: Vivado holds the source list in memory and writes it back over the file.
+> The correct place is `add_acquisition_sources.tcl`. The diagnosis below is right;
+> the repair was applied in the wrong place.
+
+> Worth noting for next time: the fingerprint in `build_project.tcl` hashes the file,
+> so the build ID changed and looked like the new module was in the build. A hash of
+> a file on disk proves the file exists, not that the toolchain reads it.
+
+### FIX 2 — two nets were used above their declarations
+
+Latent, and it would have surfaced the moment FIX 1 let elaboration proceed. The
+sequencer was instantiated up in the system-bus slot section, next to
+`sys_bus_stub_5` — but two of the nets it connects were declared further *down* the
+file:
+
+| Net | Declared at | Used at |
+|---|---|---|
+| `seq_ci`, `seq_cq`, `seq_sel` | with the phase shifter | sequencer instance, ~280 lines earlier |
+| `exp_p_in` | House Keeping section | `.trig_i (exp_p_in[0])`, ~100 lines earlier |
+
+SystemVerilog requires a `logic` declaration to precede its first use. Verilog nets
+are forgiving about this; `logic` variables are not.
+
+The instantiation moved down to sit immediately above the phase shifter it drives,
+where everything it touches already exists. No connection changed — only its position
+in the file. The alternative, hoisting the House Keeping declarations to the top,
+would have scattered a block that reads cleanly as it stands.
+
+### What was checked and found correct
+
+- All 15 ports on the instance match the module declaration exactly, name for name.
+- Bus slots 0–7 each have one owner: 0 housekeeping, 1 scope, 2 signal generator,
+  3 phase shifter, 4 resonator, 5 stub, 6 acquisition, 7 sequencer. No slot is
+  driven twice, none is left unanswered.
+- `sys_bus_stub_7` is correctly removed — slot 7 now has a real module.
+- Register map matches the header comment: STATUS packs to 32 bits with `cur` at
+  [2:0], running [3], done [4], trigger-seen [5]; the set decode `sys_addr[6:4]`
+  gives the documented 16-byte stride across 8 sets.
+- The phase shifter's registered coefficient mux is between two flip-flops as
+  described, so the guarded ADC → multiplier path is untouched.
+- `tools/verify_rtl.py` passes: no name mismatches across 32 modules.
+
+`seq_burst` and `seq_acq_arm` remain deliberately unconnected, as the RTL comment
+says — wiring them needs new ports on the signal generator and acquisition system,
+which is a separate change.
+
+### Still to do
+
+Synthesis has not been re-run — that needs Vivado on the machine with the board.
+Both fixes are structural (a project-file entry and a block move), so the next build
+is the real test.
+
+---
+
 ## 2026-07-31 — Stage 10 first scan: one wild fit poisoned three verdicts. The sweep is now adaptive
 
 The atlas's first run *proved the resonator works* — K agreed across branches to 2%,
