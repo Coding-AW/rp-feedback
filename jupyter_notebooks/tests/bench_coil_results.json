@@ -36,14 +36,14 @@
     "linear": false
   },
   "feedback": {
-    "k_per_gain": NaN,
+    "k_per_gain": 0.7130327604595442,
     "note": "phase axis is loop-dependent: cables, coil and any amplifier shift it. Only phases RELATIVE to phi_narrow are portable.",
-    "onset_gain_extrapolated": NaN,
-    "phi_narrow_deg": 342.8291140480045,
-    "phi_shift_deg": 48.12302609140848,
-    "q_max_mapped": 87.95628588171678,
-    "shift_max_hz": NaN,
-    "shift_rms_err_hz": NaN
+    "onset_gain_extrapolated": 1.4024601048562026,
+    "phi_narrow_deg": 331.2478621439014,
+    "phi_shift_deg": 66.81117707457847,
+    "q_max_mapped": 89.41420856204947,
+    "shift_max_hz": 117709.45438241959,
+    "shift_rms_err_hz": 7083.507353067402
   },
   "lc_crosscheck": {
     "c_coil_err_f": 6e-14,
@@ -67,7 +67,7 @@
     "r_series_ohm": 0.5972076257876499,
     "z0_tank_ohm": 106.27974043825937
   },
-  "measured_utc": "2026-08-06T15:31:24",
+  "measured_utc": "2026-08-07T14:38:36",
   "receiver": {
     "clean_halfwidth_hz": 6103.515625,
     "dec_log2": 11,
@@ -75,14 +75,14 @@
     "output_rate_hz": 61035.15625
   },
   "selftest": {
-    "after_ok": false,
+    "after_ok": true,
     "before_ok": true,
-    "q_error_after_frac": 0.05107582974981617,
-    "q_error_before_frac": -0.00034762339002436526
+    "q_error_after_frac": -0.013727232943592127,
+    "q_error_before_frac": -0.00034761775246472393
   },
   "source_note": "bench coil, 0.3 pF coupling caps both ports, room temperature",
   "stability": {
-    "drift_hz_per_min": 368524.33797901514,
-    "scatter_hz": 30160.2878252877
+    "drift_hz_per_min": 314912.79632806726,
+    "scatter_hz": 30450.73152787383
   }
 }

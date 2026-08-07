@@ -22,7 +22,7 @@ Everything can be done the plain way:
 | `nb_to_script.py` | Notebook to plain script. Used by the above |
 | `backup.ps1` | Copies the whole project to a USB stick, dated. See `../BACKUP.md` |
 | `verify_rtl.py` | **Not optional in spirit.** Checks the Verilog for names that do not line up — a port connected that does not exist, a signal assigned that was never declared. Catches in one second what synthesis takes ninety to report. Run after any RTL edit: `python3 tools/verify_rtl.py` |
-| `verify_notebooks.py` | **Not optional in spirit.** Checks every call in every notebook against the function it calls. Run it after editing the measurement helpers: `python3 tools/verify_notebooks.py acquisition_custom/*.ipynb` |
+| `verify_notebooks.py` | **Not optional in spirit.** Checks every call in every notebook against the function it calls. Run it after editing the measurement helpers: `python3 tools/verify_notebooks.py jupyter_notebooks/acquisition/*.ipynb` |
 
 ## One thing worth knowing either way
 
@@ -35,5 +35,5 @@ confusing hour.
 browser instead, copy them across yourself after any change:
 
 ```
-scp "acquisition_custom\*.ipynb" root@rp-f007f7.local:/root/jupyter/RedPitaya/
+scp "jupyter_notebooks\acquisition\*.ipynb" root@rp-f007f7.local:/root/jupyter/RedPitaya/
 ```

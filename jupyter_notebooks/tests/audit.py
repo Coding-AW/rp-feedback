@@ -12,8 +12,8 @@ import ast, json, io, sys, builtins
 
 import os as _os
 NB = _os.path.normpath(_os.path.join(
-    _os.path.dirname(_os.path.abspath(__file__)), '..', '..',
-    'acquisition_custom', 'Test - Resonator Coil Characterisation.ipynb'))
+    _os.path.dirname(_os.path.abspath(__file__)), '..',
+    'acquisition', 'Test - Resonator Coil Characterisation.ipynb'))
 
 
 def bindings(node):

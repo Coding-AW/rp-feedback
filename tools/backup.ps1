@@ -43,7 +43,8 @@
       Test_Project.xpr                  the project
       Test_Project.srcs/                the Verilog, the constraints, and the
                                         block design - but see below
-      acquisition_custom/               modules, notebooks, generators, docs
+      jupyter_notebooks/                every notebook, its docs and its off-board tests
+      acquisition_custom/               the acquisition modules, generators and docs
       phaseshift_custom/                the feedback path
       tools/                            these scripts
       *.md, build_project.tcl, ...      documentation and the build

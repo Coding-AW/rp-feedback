@@ -212,7 +212,7 @@ Then:
 
 ## Step 7 — Get it onto the board
 
-**See `BITSTREAM_WORKFLOW.pdf`.** Don't improvise this — there is a trap that costs people
+**See `BITSTREAM_WORKFLOW.md`.** Don't improvise this — there is a trap that costs people
 an hour, and the guide exists because it already cost one here.
 
 The short version, typed on your **PC**:

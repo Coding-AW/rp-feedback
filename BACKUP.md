@@ -43,7 +43,8 @@ for itself.
 |---|---|
 | `Test_Project.xpr` | the project |
 | `Test_Project.srcs/` | the Verilog, the constraints, and the block design |
-| `acquisition_custom/`, `phaseshift_custom/`, `tools/` | modules, notebooks, generators, scripts |
+| `jupyter_notebooks/` | every notebook, its docs and its off-board tests |
+| `acquisition_custom/`, `phaseshift_custom/`, `tools/` | modules, generators, scripts |
 | `*.md`, `build_project.tcl` | documentation and the build |
 | the last bitstream and its fingerprint | 2 MB, and it means a working board can be restored without waiting 25 minutes |
 

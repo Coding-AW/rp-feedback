@@ -66,25 +66,35 @@
  * ===========================================================================
  *  THE TIMING CONSTRAINT - READ BEFORE CHANGING ANY WIDTH
  * ===========================================================================
- *  A resonator is RECURSIVE. Today's state depends on yesterday's, so the whole
- *  multiply-add must finish inside ONE clock. It CANNOT be pipelined, and no
- *  amount of retiming will rescue it.
+ *  A resonator is RECURSIVE: today's state depends on yesterday's. A plain
+ *  register cannot be inserted into that loop, and retiming will not rescue it.
  *
- *  This project has already lost a day to exactly that: the stock oscilloscope's
- *  `dfilt1` equaliser is a recursive filter, it could not be pipelined, and it
- *  produced 1173 failing timing endpoints until it was removed.
+ *  It was built as a one-clock multiply-add for that reason, and that did not
+ *  close. From the 2026-08-07 routed report the two cascaded DSP48E1 stages
+ *  cost 5.554 ns between them; with the flip-flop, the routing in and the setup
+ *  at the far end the floor is 8.546 ns against 7.907 ns available. A rotation
+ *  is two products summed, so two DSP stages is the minimum depth - the
+ *  one-clock form could not have worked on this part however it was arranged.
  *
- *  So the widths below are chosen to put ONE DSP slice on each multiply:
+ *  It is now TWO-WAY LOOK-AHEAD: two banks holding the even and odd sample
+ *  indices, each advancing by M^2 over two clocks in two registered stages. The
+ *  loop is genuinely two clock edges long, so no multicycle constraint is
+ *  needed - see "The resonator" below. Software must write COEF_C2 / COEF_S2 as
+ *  well as COEF_C / COEF_S.
+ *
+ *  The widths still put ONE DSP slice on each multiply:
  *
  *      state       25 bits signed   - the DSP48E1's A port is 25 bits
  *      coefficient 18 bits signed   - its B port is 18 bits
  *
- *  Anything wider needs two slices cascaded, and the cascade's delay lands
- *  inside the feedback loop where it cannot be hidden. IF YOU WIDEN THESE,
- *  CHECK THE TIMING REPORT - do not assume.
+ *  Anything wider needs two slices cascaded on a single multiply. IF YOU WIDEN
+ *  THESE, CHECK THE TIMING REPORT - do not assume. If timing fails, narrow
+ *  rather than widen: 16-bit coefficients still reach Q = 300 with under 1%
+ *  error.
  *
- *  If timing does fail, narrow rather than widen: 16-bit coefficients still
- *  reach Q = 300 with under 1% error.
+ *  For the record of what one recursive filter can cost: the stock
+ *  oscilloscope's `dfilt1` equaliser produced 1173 failing endpoints until it
+ *  was removed.
  *
  * ===========================================================================
  *  WHAT Q YOU CAN ASK FOR, AND WHY THERE IS A LIMIT
@@ -145,6 +155,13 @@
  *   0x24   NOISE_OUT   RW   same layout. Amplifier noise: added AFTER the
  *                           resonator, so it is a flat floor underneath.
  *                           Both added 2026-07-30; both read back
+ *   0x28   COEF_C2     RW   [17:0] signed  c2 = r^2.cos(2.w0) x 2^17
+ *   0x2C   COEF_S2     RW   [17:0] signed  s2 = r^2.sin(2.w0) x 2^17
+ *                           Added 2026-08-07. The recursion now advances TWO
+ *                           samples per update, so it turns by 2.w0 and shrinks
+ *                           by r^2 - see "two-way look-ahead" below. COEF_C and
+ *                           COEF_S are still required: they carry the drive
+ *                           term M.b[n]. Write all four.
  *
  *  Any other offset reads as zero.
  *
@@ -218,8 +235,10 @@ localparam signed [SW-1:0] SAT_LO =  {1'b1, {(SW-1){1'b0}}};
 //---------------------------------------------------------------------------------
 reg                       set_ena;
 reg                       set_clr;
-reg  signed [ CW-1: 0]    set_c;
-reg  signed [ CW-1: 0]    set_s;
+reg  signed [ CW-1: 0]    set_c;         // 0x04  r.cos(w0)   x 2^17
+reg  signed [ CW-1: 0]    set_s;         // 0x08  r.sin(w0)   x 2^17
+reg  signed [ CW-1: 0]    set_c2;        // 0x28  r^2.cos(2w0) x 2^17
+reg  signed [ CW-1: 0]    set_s2;        // 0x2C  r^2.sin(2w0) x 2^17
 reg         [ DLYW-1: 0]  set_dly;
 reg         [ 5-1: 0]     set_oshift;
 reg         [ 5-1: 0]     set_ntank_sh;   // 0x20[4:0] tank-noise right shift
@@ -272,26 +291,67 @@ always @(posedge clk_i) begin
 end
 
 //---------------------------------------------------------------------------------
-//  The resonator itself
+//  The resonator: two-way look-ahead, two banks, two clocks per update
 //
-//  Everything here happens in one clock, on purpose and unavoidably. See the
-//  timing note in the header before touching any width.
+//  WHY IT IS NOT ONE CLOCK ANY MORE. From the 2026-08-07 routed report the two
+//  cascaded DSP48E1 stages cost 5.554 ns between them; with the flip-flop, the
+//  routing in and the setup at the far end the floor is 8.546 ns against 7.907
+//  available. A rotation is two products summed, so two DSP stages is the
+//  minimum depth - no rearrangement of the fabric was going to close 8 ns.
 //
-//  Rounding, not truncation. Truncation always biases towards minus infinity,
-//  and in a loop that feeds its own output back with a gain approaching one,
-//  a constant bias accumulates - it shows up as a slow drift or a small
-//  self-sustaining oscillation with no input at all, which looks uncomfortably
-//  like a real resonance. Adding half an LSB before the shift removes it.
+//  A register cannot go inside a recursive loop, but two samples can be
+//  computed per update with the extra clock absorbed into the coefficients:
+//
+//      x[n+1] = M   x[n]   + b[n]                 M   = (1/2^S)[[c,-s],[s,c]]
+//      x[n+2] = M^2 x[n]   + M b[n] + b[n+1]      M^2 = r^2 Rot(2 w0)
+//
+//  M is a scaled rotation, so M^2 is just the rotation doubled and the radius
+//  squared - the squared coefficients are computed in software exactly the way
+//  c and s are, and written to COEF_C2 / COEF_S2.
+//
+//  TWO BANKS hold the even and odd sample indices. Each advances by M^2 and
+//  takes two clocks to do it, in two registered stages:
+//
+//      stage 1   acc <= c2*u - s2*v                (two cascaded DSPs)
+//      stage 2   u   <= sat((acc + add) >>> SHIFT) (one adder, shift, clamp)
+//
+//  The banks are a clock apart, so one is always in stage 1 while the other is
+//  in stage 2: both stages are busy every clock and the output still changes
+//  every clock. The path genuinely crosses two clock edges, so this needs NO
+//  multicycle constraint - a clock enable would not have been enough, because
+//  static timing analysis is edge-based and would still have checked it in one.
+//
+//  THE DRIVE stays outside the loop. c*d and s*d are registered, and the
+//  pre-shift constant is folded in by concatenation as before, so stage 2 sees
+//  one ready-made addend. Consecutive clocks carry consecutive (b[n], b[n+1])
+//  pairs, and each bank takes the pair it needs; b[n] is used by both banks,
+//  which is what the algebra above asks for.
+//
+//  LATENCY. The drive leg gains one clock and the output register one more, so
+//  the emulated loop is 2 clocks (16 ns) longer than before. Set DELAY two
+//  lower to match a given loop delay; Stage 8 fits the loop phase empirically
+//  and does not care.
+//
+//  KNOWN ARTEFACT - a mirror line at fs/2 - f0. Two interleaved banks are the
+//  two polyphase components of one sequence, and quantisation stops their
+//  relative phase being exactly w0. The residue lands at fs/2 - f0: 22.5 MHz
+//  for a 40 MHz pole, 46 to 57 dB down (measured by
+//  acquisition_custom/validate_resonator_pipelined.py). It cannot enter a
+//  measurement - the receiver's clean window is +-12 kHz and the image sits
+//  megahertz away - but it WILL show in a wide band survey if the emulator is
+//  left enabled during one.
+//
+//  Rounding is unchanged: half an LSB before the shift, because truncation
+//  always biases towards minus infinity and a loop with gain near one
+//  accumulates that into a drift that looks like a real resonance.
 //---------------------------------------------------------------------------------
-reg signed [ SW-1: 0] u, v;
+localparam integer PW = SW + CW;                 // 43: one product
+localparam signed [PW:0] ROUND = {{(PW+1-SHIFT){1'b0}}, 1'b1, {(SHIFT-1){1'b0}}};
+
+reg                   ph;                        // 0/1: which bank is in stage 1
+reg signed [ SW-1: 0] uA, vA, uB, vB;            // the two state banks
+reg signed [ SW-1: 0] u,  v;                     // the bank that updated last
 reg                   clipped;
-
-wire signed [SW+CW-1: 0] cu = set_c * u;
-wire signed [SW+CW-1: 0] sv = set_s * v;
-wire signed [SW+CW-1: 0] su = set_s * u;
-wire signed [SW+CW-1: 0] cv = set_c * v;
-
-localparam signed [SW+CW-1:0] ROUND = {{(SW+CW-SHIFT){1'b0}}, 1'b1, {(SHIFT-1){1'b0}}};
 
 //---------------------------------------------------------------------------------
 //  The drive: input plus tank noise, PRE-SUMMED INTO A REGISTER (2026-07-30).
@@ -314,59 +374,110 @@ always @(posedge clk_i) begin
              + $signed({noise_tank_r[16], noise_tank_r});
 end
 
-wire signed [SW: 0] u_nxt = ((cu - sv + ROUND) >>> SHIFT)
-                          + $signed({{(SW+1-18){drive_r[17]}}, drive_r});
-wire signed [SW: 0] v_nxt =  ((su + cv + ROUND) >>> SHIFT);
-
 //---------------------------------------------------------------------------------
-//  Saturation, detected from the top TWO bits instead of by comparison.
+//  The drive, pipelined outside the loop.
 //
-//  EDIT 2026-08-03. This is a pure implementation change: the values written to
-//  u and v, and the clip flag, are BIT-FOR-BIT what they were. Nothing about the
-//  emulated physics, the coefficient scaling or the software changes.
-//
-//  WHY IT WAS WORTH DOING
-//  The old form asked `u_nxt > SAT_HI` and `u_nxt < SAT_LO`. Each of those is a
-//  26-bit magnitude comparison, and Vivado builds one as a carry chain - which
-//  it then had to place AFTER the adder's own carry chain, inside a recursion
-//  that must close in 8 ns. The 2026-08-03 timing report showed the two chains
-//  in series: 18 CARRY4 levels, about 8.6 ns of the 14.7 ns path.
-//
-//  THE OBSERVATION
-//  u_nxt is 26-bit signed; SAT_HI and SAT_LO are exactly the largest and
-//  smallest values a 25-bit signed number can hold. So "does it fit in 25 bits"
-//  is precisely "are the top two bits the same" - the textbook signed overflow
-//  test, and one XOR gate rather than a carry chain:
-//
-//      u_nxt[25] u_nxt[24]   meaning
-//      --------- ---------   -----------------------------------------
-//          0         0       fits, positive
-//          0         1       overflowed positive  -> SAT_HI
-//          1         0       overflowed negative  -> SAT_LO
-//          1         1       fits, negative
-//
-//  Verified equivalent by exhaustive comparison of both forms over the whole
-//  26-bit range at reduced widths, and over the boundaries plus 400k random
-//  values at the real width: zero mismatches.
-//
-//  NOTE: this shortens the loop but does not by itself make it close in 8 ns -
-//  the unregistered DSP multiply alone is 3.8 ns. See CHANGELOG.md, 2026-08-03.
+//  drive_r is the input plus tank noise, already registered above. cd_r and
+//  sd_r are its products with c and s - the M b[n] term. add_u also carries
+//  b[n+1] and the rounding constant, and because ROUND is a single 1 at bit
+//  SHIFT-1 while drive<<SHIFT has nothing below bit SHIFT, that part is a
+//  CONCATENATION rather than an adder.
 //---------------------------------------------------------------------------------
-wire u_over = u_nxt[SW] ^ u_nxt[SW-1];
-wire v_over = v_nxt[SW] ^ v_nxt[SW-1];
+reg signed [ CW+18-1: 0] cd_r, sd_r;
+reg signed [ PW: 0]      add_u, add_v;
 
 always @(posedge clk_i) begin
+  if (rstn_i == 1'b0) begin
+    cd_r  <= {(CW+18){1'b0}};
+    sd_r  <= {(CW+18){1'b0}};
+    add_u <= {(PW+1){1'b0}};
+    add_v <= {(PW+1){1'b0}};
+  end else begin
+    cd_r  <= set_c * drive_r;
+    sd_r  <= set_s * drive_r;
+    // cd_r is c*d[n-1]; drive_r is d[n]. Together they are M b[n] + b[n+1].
+    add_u <= cd_r + $signed({{(PW+1-18-SHIFT){drive_r[17]}}, drive_r,
+                             1'b1, {(SHIFT-1){1'b0}}});
+    add_v <= sd_r + ROUND;
+  end
+end
+
+//---------------------------------------------------------------------------------
+//  Stage 1 - the rotation, one bank per clock. Two DSPs each; Vivado cascades
+//  them through PCOUT/PCIN and registers the result in the second DSP's own P
+//  register, which is what makes this side of the split fast.
+//---------------------------------------------------------------------------------
+reg signed [ PW: 0] accA_u, accA_v, accB_u, accB_v;
+
+always @(posedge clk_i) begin
+  if (rstn_i == 1'b0 || set_clr || !set_ena) begin
+    accA_u <= {(PW+1){1'b0}};  accA_v <= {(PW+1){1'b0}};
+    accB_u <= {(PW+1){1'b0}};  accB_v <= {(PW+1){1'b0}};
+  end else if (ph == 1'b0) begin
+    accA_u <= set_c2 * uA - set_s2 * vA;
+    accA_v <= set_s2 * uA + set_c2 * vA;
+  end else begin
+    accB_u <= set_c2 * uB - set_s2 * vB;
+    accB_v <= set_s2 * uB + set_c2 * vB;
+  end
+end
+
+//---------------------------------------------------------------------------------
+//  Stage 2 - add the drive, shift, clamp. Saturation is the top-two-bits test:
+//  u_nxt is SW+1 bits and SAT_HI/SAT_LO are the extremes of SW, so "does it
+//  fit" is "are the top two bits the same" - one XOR, not a comparison.
+//---------------------------------------------------------------------------------
+wire signed [ PW+1: 0] sumA_u = accA_u + add_u;
+wire signed [ PW+1: 0] sumA_v = accA_v + add_v;
+wire signed [ PW+1: 0] sumB_u = accB_u + add_u;
+wire signed [ PW+1: 0] sumB_v = accB_v + add_v;
+
+wire signed [ SW: 0] uA_nxt = sumA_u >>> SHIFT;
+wire signed [ SW: 0] vA_nxt = sumA_v >>> SHIFT;
+wire signed [ SW: 0] uB_nxt = sumB_u >>> SHIFT;
+wire signed [ SW: 0] vB_nxt = sumB_v >>> SHIFT;
+
+wire uA_over = uA_nxt[SW] ^ uA_nxt[SW-1];
+wire vA_over = vA_nxt[SW] ^ vA_nxt[SW-1];
+wire uB_over = uB_nxt[SW] ^ uB_nxt[SW-1];
+wire vB_over = vB_nxt[SW] ^ vB_nxt[SW-1];
+
+//  The clamp, written out per bank rather than as a function - the rest of this
+//  module uses no functions and this is the same conditional the single-clock
+//  version used.
+wire signed [SW-1:0] uA_cl = uA_over ? (uA_nxt[SW] ? SAT_LO : SAT_HI) : uA_nxt[SW-1:0];
+wire signed [SW-1:0] vA_cl = vA_over ? (vA_nxt[SW] ? SAT_LO : SAT_HI) : vA_nxt[SW-1:0];
+wire signed [SW-1:0] uB_cl = uB_over ? (uB_nxt[SW] ? SAT_LO : SAT_HI) : uB_nxt[SW-1:0];
+wire signed [SW-1:0] vB_cl = vB_over ? (vB_nxt[SW] ? SAT_LO : SAT_HI) : vB_nxt[SW-1:0];
+
+//  Bank A is in stage 2 when ph is 1 - the clock after it was in stage 1 - and
+//  bank B on the opposite phase. u and v then take whichever bank wrote last,
+//  which is a register-to-register hop through one multiplexer.
+always @(posedge clk_i) begin
   if (rstn_i == 1'b0 || set_clr) begin
-    u       <= {SW{1'b0}};
-    v       <= {SW{1'b0}};
+    ph      <= 1'b0;
+    uA      <= {SW{1'b0}};  vA <= {SW{1'b0}};
+    uB      <= {SW{1'b0}};  vB <= {SW{1'b0}};
+    u       <= {SW{1'b0}};  v  <= {SW{1'b0}};
     clipped <= 1'b0;
   end else if (set_ena) begin
-    u <= u_over ? (u_nxt[SW] ? SAT_LO : SAT_HI) : u_nxt[SW-1:0];
-    v <= v_over ? (v_nxt[SW] ? SAT_LO : SAT_HI) : v_nxt[SW-1:0];
-    if (u_over || v_over) clipped <= 1'b1;
+    ph <= ~ph;
+    u  <= ph ? uA : uB;
+    v  <= ph ? vA : vB;
+    if (ph == 1'b1) begin
+      uA <= uA_cl;
+      vA <= vA_cl;
+      if (uA_over || vA_over) clipped <= 1'b1;
+    end else begin
+      uB <= uB_cl;
+      vB <= vB_cl;
+      if (uB_over || vB_over) clipped <= 1'b1;
+    end
   end else begin
-    u <= {SW{1'b0}};
-    v <= {SW{1'b0}};
+    ph <= 1'b0;
+    uA <= {SW{1'b0}};  vA <= {SW{1'b0}};
+    uB <= {SW{1'b0}};  vB <= {SW{1'b0}};
+    u  <= {SW{1'b0}};  v  <= {SW{1'b0}};
   end
 end
 
@@ -424,6 +535,8 @@ always @(posedge clk_i) begin
     set_clr    <= 1'b0;          // unchanged at power-on
     set_c      <= {CW{1'b0}};
     set_s      <= {CW{1'b0}};
+    set_c2     <= {CW{1'b0}};
+    set_s2     <= {CW{1'b0}};
     set_dly    <= {DLYW{1'b0}};
     set_oshift <= 5'd0;
     set_ntank_sh <= 5'd0;        // noise off at power-on, like everything else
@@ -437,6 +550,8 @@ always @(posedge clk_i) begin
         20'h00 : begin set_ena <= sys_wdata[0]; set_clr <= sys_wdata[1]; end
         20'h04 :       set_c      <= sys_wdata[CW-1:0];
         20'h08 :       set_s      <= sys_wdata[CW-1:0];
+        20'h28 :       set_c2     <= sys_wdata[CW-1:0];
+        20'h2C :       set_s2     <= sys_wdata[CW-1:0];
         20'h0C :       set_dly    <= sys_wdata[DLYW-1:0];
         20'h10 :       set_oshift <= sys_wdata[4:0];
         20'h20 : begin set_ntank_sh <= sys_wdata[4:0]; set_ntank_en <= sys_wdata[8]; end
@@ -466,6 +581,8 @@ always @(posedge clk_i) begin
       20'h1C : sys_rdata <= {{(32-SW){v[SW-1]}}, v};
       20'h20 : sys_rdata <= {23'h0, set_ntank_en, 3'h0, set_ntank_sh};
       20'h24 : sys_rdata <= {23'h0, set_nout_en,  3'h0, set_nout_sh};
+      20'h28 : sys_rdata <= {{(32-CW){set_c2[CW-1]}}, set_c2};
+      20'h2C : sys_rdata <= {{(32-CW){set_s2[CW-1]}}, set_s2};
       default: sys_rdata <= 32'h0;
     endcase
   end

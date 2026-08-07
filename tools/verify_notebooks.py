@@ -2,7 +2,7 @@
 """
 Check the notebooks for things that cannot possibly work, without running them.
 
-    python3 tools/verify_notebooks.py acquisition_custom/*.ipynb
+    python3 tools/verify_notebooks.py jupyter_notebooks/acquisition/*.ipynb
 
 WHY THIS EXISTS
 ---------------
@@ -50,7 +50,12 @@ import builtins
 import json
 import sys
 
-BUILTIN = set(dir(builtins)) | {'__name__', '__file__', '__doc__'}
+#  get_ipython is injected by the IPython kernel, so it exists at run time in
+#  every notebook and in none of them at read time. Without it here, any
+#  notebook that switches its matplotlib backend depending on whether it is
+#  under Jupyter - which is the correct way to write one - is reported as
+#  broken, and a checker that cries wolf stops being read.
+BUILTIN = set(dir(builtins)) | {'__name__', '__file__', '__doc__', 'get_ipython'}
 
 
 # ---------------------------------------------------------------------------

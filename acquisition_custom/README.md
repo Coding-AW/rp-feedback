@@ -12,7 +12,7 @@ disturbs.
 - **Is it working?** → `sudo python3 ../check_system.py` on the board
 - **Build everything** → `source .../build_project.tcl` in Vivado
 - **Every edit ever made** → `../CHANGELOG.md`
-- **Loading bitstreams** → `../BITSTREAM_WORKFLOW.pdf`
+- **Loading bitstreams** → `../BITSTREAM_WORKFLOW.md`
 
 ---
 
@@ -35,13 +35,13 @@ disturbs.
 | Memory writer | `red_pitaya_acq_dma.v` | Packs I/Q into 64-bit words and streams them to memory |
 | Top level | `red_pitaya_acq.v` | Registers, debug features, glue |
 
-Coefficients can be **rewritten at run time** — see `FIR Filter Designer.ipynb`.
+Coefficients can be **rewritten at run time** — see `jupyter_notebooks/acquisition/FIR Filter Designer.ipynb`.
 
 ---
 
 ## Changing the correction filter
 
-**The easy way: `FIR Filter Designer.ipynb`, on the board.** Change the passband and stopband,
+**The easy way: `jupyter_notebooks/acquisition/FIR Filter Designer.ipynb`, on the board.** Change the passband and stopband,
 see the response, load it into the chip in about a second. No Vivado, no rebuild, no bitstream.
 The coefficient memory is writable at run time through registers `0x40` and `0x44`.
 

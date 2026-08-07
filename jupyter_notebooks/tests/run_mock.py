@@ -13,8 +13,8 @@ import fakehw
 
 import os as _os
 NB = _os.path.normpath(_os.path.join(
-    _os.path.dirname(_os.path.abspath(__file__)), '..', '..',
-    'acquisition_custom', 'Test - Resonator Coil Characterisation.ipynb'))
+    _os.path.dirname(_os.path.abspath(__file__)), '..',
+    'acquisition', 'Test - Resonator Coil Characterisation.ipynb'))
 FIGDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'figs')
 
 # Smaller grids and no waiting, so a full pass takes seconds. Every code path is

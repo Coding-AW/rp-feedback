@@ -75,10 +75,10 @@ host latency compensation, gives < 0.09° phase / < 0.11% gain error across 0–
 |------|--------|
 | `...srcs/sources_1/imports/rp/rtl/classic/red_pitaya_phaseshift.v` | **NEW** custom module (plain Verilog, like `red_pitaya_pid.v`) |
 | `...srcs/sources_1/imports/rp/prj/v0.94/rtl/red_pitaya_top.sv` | PID instantiation on `sys[3]` swapped for `red_pitaya_phaseshift i_ps` (original PID kept, commented, for revert) |
-| `phaseshift_custom/phase_shift_control.ipynb` | Jupyter control (interactive sliders, latency-compensated) |
+| `jupyter_notebooks/phaseshift/phase_shift_control.ipynb` | Jupyter control (interactive sliders, latency-compensated) |
 | `phaseshift_custom/validate_phaseshift.py` | ideal-timing fixed-point model |
 | `phaseshift_custom/validate_bram.py` | cycle-accurate block-RAM model + latency check |
-| `phaseshift_custom/scope_phase_check.ipynb` | internal-scope input/output phase measurement (diagnostic) |
+| `jupyter_notebooks/phaseshift/scope_phase_check.ipynb` | internal-scope input/output phase measurement (diagnostic) |
 
 ## Phase diagnostic: FPGA vs measurement-rig artifact
 

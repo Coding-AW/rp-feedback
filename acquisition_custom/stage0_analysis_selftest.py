@@ -53,6 +53,10 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+#  The notebooks moved to jupyter_notebooks/ on 2026-08-06. This script stayed
+#  here, because it belongs to the acquisition module rather than to a notebook.
+NB_DIR = os.path.normpath(os.path.join(HERE, '..', 'jupyter_notebooks',
+                                       'acquisition'))
 VERBOSE = '-v' in sys.argv or '--verbose' in sys.argv
 
 FS_CLK = 125e6
@@ -72,7 +76,10 @@ def load_from_notebook(name, wanted):
     holding numpy. Deliberately not an import: the functions live in notebooks,
     and copying them here would mean testing the copy.
     """
-    path = os.path.join(HERE, name)
+    path = os.path.join(NB_DIR, name)
+    if not os.path.isfile(path):
+        raise SystemExit('cannot find %s in %s - the notebooks live in '
+                         'jupyter_notebooks/acquisition/' % (name, NB_DIR))
     nb = json.load(io.open(path, encoding='utf-8'))
     source = '\n'.join(''.join(c['source'])
                        for c in nb['cells'] if c['cell_type'] == 'code')

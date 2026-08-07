@@ -110,7 +110,7 @@ recording the memory path as unproven — which unblocks the physics rather than
 ```powershell
 .\tools\backup.ps1          # 35 MB zip, under a minute
 python3 tools\verify_rtl.py            # after any Verilog edit
-python3 tools\verify_notebooks.py acquisition_custom\*.ipynb
+python3 tools\verify_notebooks.py jupyter_notebooks\acquisition\*.ipynb
 ```
 
 `build_project.tcl` runs both checks itself and refuses to build if either finds a real problem.

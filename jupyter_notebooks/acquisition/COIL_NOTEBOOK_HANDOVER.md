@@ -10,11 +10,11 @@ Paste this into a new chat to pick up where the previous one left off.
 > gone; Step 3 confirms a candidate by correlating two scans before committing to it, and halves
 > `SEARCH_STEP` until one does; Step 8d sweeps each feedback setting on its own span and plots
 > two auto-scaled panels. The off-board test tools that this document said were lost in `/tmp`
-> now live in `tools/coil_notebook_tests/`. Section 2's measured values below are from the run
+> now live in `jupyter_notebooks/tests/`. Section 2's measured values below are from the run
 > before all of that, and §7's first two actions are now done automatically.
 
 
-**File:** `acquisition_custom/Test - Resonator Coil Characterisation.ipynb` (formerly "Test - Coil wo Amplifier", and before that "Test Stage 18")
+**File:** `jupyter_notebooks/acquisition/Test - Resonator Coil Characterisation.ipynb` (formerly "Test - Coil wo Amplifier", and before that "Test Stage 18")
 **Size:** 61 cells (38 code, 23 markdown). Backups `.bak` … `.bak17`, oldest first.
 **Board:** Red Pitaya STEMlab 125-14. Bitstream build id `0x096CEAD0`.
 **Reference:** Herkenhoff *et al.*, Rev. Sci. Instrum. **92**, 103201 (2021), and the

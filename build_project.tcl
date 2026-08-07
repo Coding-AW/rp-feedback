@@ -138,7 +138,7 @@ puts ""
 foreach {label script extra} [list \
         "RTL names" "$proj_root/tools/verify_rtl.py" {} \
         "Notebooks" "$proj_root/tools/verify_notebooks.py" \
-            [glob -nocomplain "$proj_root/acquisition_custom/*.ipynb"]] {
+            [glob -nocomplain "$proj_root/jupyter_notebooks/acquisition/*.ipynb"]] {
     lassign [run_checker $PY3 $script $extra] status out
     switch -- $status {
         ok {
@@ -341,6 +341,51 @@ puts ""
 #  already saved considerably more than that.
 reset_run impl_1
 reset_run synth_1
+
+#  Prove the run logs can actually be written, BEFORE launching.
+#
+#  Vivado launches each run step through a Windows Script Host wrapper
+#  (rundef.js) that opens runme.log for writing as its very first act. If that
+#  file is locked the wrapper dies immediately with "Permission denied", the
+#  child never reports back, wait_on_run blocks for ever, and the GUI sits at
+#  "Initializing Design" looking busy. That cost an hour on 2026-08-07.
+#
+#  reset_run above is supposed to clear these, and it silently does not when
+#  the file is held open. So check, and say what is holding it.
+#
+#  The usual culprits, in order: a leftover vivado.exe from a previous run; the
+#  GUI's own Log tab still displaying the last run's log; an editor or tail
+#  viewer left open on it; a backup or antivirus sweep over the runs tree.
+foreach _run {synth_1 impl_1} {
+  foreach _f {runme.log job.id.log exception.log} {
+    set _log "$proj_root/Test_Project.runs/$_run/$_f"
+    if {[file exists $_log] && [catch {file delete -force $_log} _msg]} {
+        puts ""
+        puts "  STOP - $_run/runme.log cannot be removed."
+        puts "         $_msg"
+        puts ""
+        puts "  Something is holding it open. Launching anyway would leave"
+        puts "  Vivado apparently stuck on \"Initializing Design\" for ever."
+        puts ""
+        puts "  Seen 2026-08-07: an ORPHANED cmd.exe - the run's own batch shell,"
+        puts "  spawned by Vivado and never reaped - held runme.log and"
+        puts "  job.id.log. Windows names it \"Command Processor\" when a delete"
+        puts "  is refused. It is also why Vivado said \"PID not specified\" on"
+        puts "  shutdown: the launcher died before recording a PID to kill."
+        puts ""
+        puts "  Close Vivado, then in an elevated PowerShell:"
+        puts "    Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" |"
+        puts "      Where CommandLine -like '*Test_Project*' | Stop-Process -Force"
+        puts "  If that finds nothing: Resource Monitor -> CPU -> Associated"
+        puts "  Handles -> search the file name; it gives the PID directly."
+        puts ""
+        puts "  Then delete the WHOLE Test_Project.runs/$_run folder - Vivado"
+        puts "  recreates it - and re-source this script."
+        return
+    }
+  }
+}
+
 launch_runs impl_1 -to_step write_bitstream -jobs 4
 wait_on_run impl_1
 
@@ -583,7 +628,7 @@ if {[file exists $bit] && !$timing_ok} {
     puts "  Bitstream: $bit"
     puts ""
     puts "  NEXT STEPS"
-    puts "    1. Copy it to the board. See BITSTREAM_WORKFLOW.pdf - and note that"
+    puts "    1. Copy it to the board. See BITSTREAM_WORKFLOW.md - and note that"
     puts "       the copy command runs on YOUR PC, not on the board."
     puts "    2. Check the right one loaded:  sudo python3 check_system.py"
     puts "    3. Run the test notebooks in order, starting from Test Stage 2."

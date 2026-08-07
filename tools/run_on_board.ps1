@@ -80,18 +80,25 @@ if ($PSVersionTable.PSVersion.Major -lt 5) {
 }
 
 $root     = Split-Path -Parent $PSScriptRoot
-$acqDir   = Join-Path $root "acquisition_custom"
+$acqDir   = Join-Path $root "acquisition_custom"          # fir_coeffs.txt lives here
+$nbDirs   = @((Join-Path $root "jupyter_notebooks\acquisition"),
+              (Join-Path $root "jupyter_notebooks\phaseshift"))
 $results  = Join-Path $root "results"
 $remote   = "/root/acq_run"
 
 # ---------------------------------------------------------------- locate it --
 $nbPath = $Notebook
-if (-not (Test-Path $nbPath)) { $nbPath = Join-Path $acqDir $Notebook }
+foreach ($d in $nbDirs) {
+    if (-not (Test-Path $nbPath)) { $nbPath = Join-Path $d $Notebook }
+}
 if (-not (Test-Path $nbPath)) { $nbPath = Join-Path $root $Notebook }
 if (-not (Test-Path $nbPath)) {
     Write-Host "Cannot find '$Notebook'." -ForegroundColor Red
-    Write-Host "Notebooks available in acquisition_custom:"
-    Get-ChildItem $acqDir -Filter *.ipynb | ForEach-Object { Write-Host "   $($_.Name)" }
+    Write-Host "Notebooks available:"
+    foreach ($d in $nbDirs) {
+        Get-ChildItem $d -Filter *.ipynb -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "   $($_.Name)" }
+    }
     exit 1
 }
 $nbPath = (Resolve-Path $nbPath).Path

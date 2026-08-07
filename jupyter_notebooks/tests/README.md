@@ -1,6 +1,7 @@
 # Off-board tests for `Test - Resonator Coil Characterisation.ipynb`
 
-These existed only in `/tmp` and were lost between sessions. They live here now.
+These existed only in `/tmp` and were lost between sessions. They live here now, next to
+the notebooks they test.
 
 | File | What it does |
 |---|---|

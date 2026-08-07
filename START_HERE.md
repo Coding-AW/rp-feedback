@@ -49,7 +49,7 @@ your PC does not exist on the board until you copy it across.
 > board instead of the PC. It reported success, transferred 2 MB, and the board ran week-old
 > logic for an hour while looking perfectly healthy.
 
-Full guide: **`BITSTREAM_WORKFLOW.pdf`**
+Full guide: **`BITSTREAM_WORKFLOW.md`**
 
 ---
 
@@ -101,7 +101,7 @@ any new sources, builds, checks the result, and tells you plainly whether it pas
 
 **Step-by-step, including where to find the Tcl Console:** `HOW_TO_RUN.md`
 
-Then copy the bitstream across — see `BITSTREAM_WORKFLOW.pdf` — and run `check_system.py`.
+Then copy the bitstream across — see `BITSTREAM_WORKFLOW.md` — and run `check_system.py`.
 
 ### "Something is wrong and I don't know why"
 
@@ -112,7 +112,7 @@ Then copy the bitstream across — see `BITSTREAM_WORKFLOW.pdf` — and run `che
 
 ### "I want to change the correction filter"
 
-Open `acquisition_custom/FIR Filter Designer.ipynb` on the board. Two numbers, a plot, and it
+Open `jupyter_notebooks/acquisition/FIR Filter Designer.ipynb` on the board. Two numbers, a plot, and it
 loads into the chip in about a second — no rebuild. Changing the *number* of taps still needs
 one; the notebook says so.
 
@@ -178,7 +178,7 @@ Test_Project/
 ├── HOW_TO_RUN.md            the two commands, keystroke by keystroke
 ├── check_system.py          "is it working?"          run on the BOARD
 ├── build_project.tcl        "build everything"        run on your PC
-├── BITSTREAM_WORKFLOW.pdf   copying files to the board, and the traps
+├── BITSTREAM_WORKFLOW.md   copying files to the board, and the traps
 ├── CHANGELOG.md             every change ever made, and why
 ├── HANDOVER.md              where things stand, and the one open problem
 ├── GIT.md                   git and GitHub, from nothing
@@ -189,17 +189,21 @@ Test_Project/
 │   └── nb_to_script.py
 ├── results/                 logs and plots come back here
 │
+├── jupyter_notebooks/       EVERY NOTEBOOK, IN ONE PLACE
+│   ├── acquisition/           Test Stage 2..17, the coil characterisation,
+│   │                          FIR Filter Designer, and their own docs
+│   ├── phaseshift/            phase_shift_control, scope_phase_check
+│   └── tests/                 run every notebook off the board, against a mock
+│
 ├── acquisition_custom/      THE MEASURING SYSTEM
 │   ├── README.md              reference: registers, settings, limits
 │   ├── EXPLAINER.md           how it works, in plain English
-│   ├── Test Stage 2..7 .ipynb the tests, in order
-│   ├── FIR Filter Designer.ipynb  change the filter live, no rebuild
 │   ├── gen_fir_coeffs.py      makes a filter design permanent
 │   └── validate_*.py          software checks of each block
 │
 ├── phaseshift_custom/       THE FEEDBACK PATH
 │   ├── README.md
-│   └── phase_shift_control.ipynb
+│   └── validate_*.py
 │
 └── Test_Project.srcs/       the design itself (Verilog). Rarely edited by hand
 ```

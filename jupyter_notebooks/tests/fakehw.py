@@ -94,17 +94,29 @@ class Board(object):
         return bool(self._r(self.EMU, 0x00) & 1) and self.s.emulator_present
 
     def _emu_pole(self):
-        """Recover f0 and Q from the 18-bit coefficients actually written."""
+        """Recover f0 and Q from the 18-bit coefficients actually written.
+
+        Since 2026-08-07 the recursion is two-way look-ahead, so the pole it
+        realises lives in COEF_C2/COEF_S2 (0x28/0x2C): r squared, turned by
+        2*w0. COEF_C/COEF_S carry only the drive term. atan2 gives 2*w0 modulo
+        2*pi and 2*w0 passes pi above 31.25 MHz, so the branch is resolved
+        against the angle in COEF_C/COEF_S, which software wrote alongside."""
         def s18(v):
             v &= 0x3FFFF
             return v - (1 << 18) if v & 0x20000 else v
         ci = s18(self._r(self.EMU, 0x04))
         cs = s18(self._r(self.EMU, 0x08))
-        if ci == 0 and cs == 0:
+        c2 = s18(self._r(self.EMU, 0x28))
+        s2 = s18(self._r(self.EMU, 0x2C))
+        if c2 == 0 and s2 == 0:
             return None
-        r = math.hypot(ci, cs) / 131072.0
-        f0 = math.atan2(cs, ci) / (2.0 * math.pi) * FS_CLK
-        q = math.pi * (f0 / FS_CLK) / max(1.0 - r, 1e-12)
+        r2 = math.hypot(c2, s2) / 131072.0
+        two_w0 = math.atan2(s2, c2)
+        if ci or cs:                       # lift onto the branch nearest 2*w0
+            hint = 2.0 * math.atan2(cs, ci)
+            two_w0 += 2.0 * math.pi * round((hint - two_w0) / (2.0 * math.pi))
+        f0 = (two_w0 / 2.0) / (2.0 * math.pi) * FS_CLK
+        q = math.pi * (f0 / FS_CLK) / max(1.0 - math.sqrt(r2), 1e-12)
         return f0, q
 
     def _feedback(self):

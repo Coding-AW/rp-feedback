@@ -9,8 +9,621 @@ Two custom subsystems live here:
   characterised.
 - **Acquisition system** (`acquisition_custom/`) — in progress.
 
+Every Jupyter notebook lives in `jupyter_notebooks/` (moved there 2026-08-06), with its
+off-board test harness in `jupyter_notebooks/tests/`.
+
 Both reproduce parts of Herkenhoff *et al.*, *A digital feedback system for advanced
 ion manipulation techniques in Penning traps*, Rev. Sci. Instrum. **92**, 103201 (2021).
+
+---
+
+## 2026-08-07 — The emulator returns the answer it was given, on hardware
+
+Step 0 and Step 1 pass on bitstream `0xC207CBD8`. The two-way look-ahead resonator works on
+silicon: the recursion runs in two clocks across two interleaved banks, `Emulator.config()` writes
+four coefficients, the pole is recovered from `COEF_C2`/`COEF_S2`, and the self-test gets back the
+centre and Q it asked for.
+
+That closes an arc that started with a bitstream failing timing by 6.9 ns:
+
+| | 08-03 | 08-07 a | 08-07 b | now |
+|---|---|---|---|---|
+| WNS | -6.907 ns | -3.482 ns | | **-0.251 ns** |
+| Failing endpoints | 6224 | 3211 | | **6** |
+| Emulator self-test | untrustworthy | untrustworthy | flat, Q = 1.1 | **PASS** |
+
+**This is the first time the Step 1 self-test has been trustworthy.** On every earlier build the
+emulator sat behind failing timing paths, so the notebook's one guarantee of instrument integrity
+was itself unverified. Every number in `.bak18` was taken under that.
+
+### One false alarm on the way, and the guard it produced
+
+The first attempt reported `f0 = 39.199818 MHz, Q = 1.1, residual 0.0010` - a beautifully fitted
+piece of nonsense. Cause: the notebook that ran was the previous one, which writes only `COEF_C`
+and `COEF_S`. On the new hardware that leaves `c2 = s2 = 0`, the recursion has no pole, and the
+emulator becomes a pass-through. Simulated against the cycle-exact model of the loaded build:
+
+| | old notebook (c2 = s2 = 0) | correct notebook |
+|---|---|---|
+| Response across +-2.5 linewidths | **1.008 max/min - flat** | 5.10 max/min |
+| Position of the peak | index **24 of 25**, an edge | index 12, the centre |
+
+A flat curve with its maximum at the edge forces the Lorentzian fit to extrapolate, which puts the
+centre outside the swept band and the width at tens of megahertz - and fits it with a tiny residual,
+because a straight line fits very well indeed. Exactly the reported numbers.
+
+This is the board-copy drift `tools/README.md` already warns about: the notebook on the board and
+the notebook in the project are separate files.
+
+Two guards added:
+
+- **`Emulator.config()` reads back 0x28/0x2C** and refuses if they did not stick - catching a new
+  notebook on an old bitstream, and naming the reverse case in the message.
+- **Step 0 probes `COEF_C2`** with a bit pattern. An old bitstream does not decode 0x28 and returns
+  zero, so preflight fails loudly instead of letting Step 1 produce a plausible wrong answer.
+
+The reverse mistake - old notebook, new hardware - cannot be caught from inside the old notebook,
+which does not know to look. Push the master copy with `run_on_board.ps1`.
+
+### Outstanding
+
+- **WNS -0.251 ns**, six paths, all `set_oshift -> dly_buf`: the output stage's variable barrel
+  shifter, the noise add and the saturation feeding the delay line's block RAM. Not the loop. One
+  pipeline register fixes it; the output stage is explicitly non-recursive. Costs one clock, so
+  `delay` goes 13 -> 12.
+- **The OUT2 monitor is still unimplemented** - `red_pitaya_phaseshift.v` line 364 still reads
+  `assign dat_b_o = {DWI{1'b0}}`. Design is in `EXTERNAL_VERIFICATION_PLAN.md` section 1.2.
+- The working tree carries 85+ uncommitted changes, so `bitstream_id.txt` cannot name a commit and
+  the register 0x48 -> commit chain is broken.
+
+---
+
+## 2026-08-07 — An hour on "Initializing Design". The run had already died in its first second
+
+Vivado sat on "Initializing Design" for over an hour. It was not working. `impl_1/exception.log`,
+written at 11:59:
+
+```
+ERROR: Exception caught trying to open file
+       ...\Test_Project.runs\impl_1/runme.log
+    Exception name: Error
+    Exception error code: 70
+    Exception message: Permission denied
+```
+
+Vivado launches each run step through a Windows Script Host wrapper (`rundef.js`) whose first act
+is to open `runme.log` for writing. The old log from the 11:19 run was still there - 71,826 bytes,
+untouched - and locked. The wrapper died on that line, `init_design` never started, the child
+never reported back, and `wait_on_run impl_1` blocked for ever while the GUI showed a phase that
+had not begun.
+
+`reset_run impl_1` on line 342 is supposed to clear that directory. It **silently failed** to
+remove the locked file and returned as if it had worked, which is why nothing looked wrong.
+
+### What it was not
+
+Synthesis ran fine, immediately before: **0 errors, 0 critical warnings**, 4m28s, checkpoint
+written. The new two-bank resonator synthesises. DSPs went 17 -> **26 of 80** (the estimate was
+about 10 extra; the real figure is 9), block RAM 36.5 of 60.
+
+### Fixed
+
+`build_project.tcl` STEP 3 now proves both run logs are writable *before* launching, and refuses
+with the likely causes if not:
+
+```tcl
+foreach _run {synth_1 impl_1} {
+    set _log "$proj_root/Test_Project.runs/$_run/runme.log"
+    if {[file exists $_log] && [catch {file delete -force $_log} _msg]} { ...stop... }
+}
+```
+
+**The holder turned out to be an orphaned `cmd.exe`** - the run's own batch shell, spawned by
+Vivado at 11:59 and never reaped. Windows reports it as *"being used by Command Processor"* when
+a delete is refused, and it is also why Vivado printed `[Vivado 12-1017] Problems encountered:
+1. PID not specified` on shutdown: the launcher died before recording a PID, so there was nothing
+to terminate. `reset_run impl_1` then removed everything in the directory it was allowed to and
+left exactly the two files the orphan held - `runme.log` and `job.id.log` - which is what made
+the cause visible.
+
+Kill it from an elevated PowerShell:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" |
+  Where-Object { $_.CommandLine -like '*Test_Project*' } | Stop-Process -Force
+```
+
+then delete the whole `Test_Project.runs/impl_1` folder; Vivado recreates it. If the command line
+filter finds nothing, Resource Monitor -> CPU -> Associated Handles -> search the file name gives
+the PID directly. The guard now clears `runme.log`, `job.id.log` and `exception.log` for both
+runs, and names all of this if it cannot.
+
+This is the same shape as the `-slack_lessthan` bug and the missing `bitstream_id.txt`: a step
+that fails without saying so, and a later step that then reports something untrue - here, a
+progress indicator for work that never started.
+
+---
+
+## 2026-08-07 — Two-way look-ahead implemented in Verilog
+
+The design validated earlier today is now written. `red_pitaya_resonator.v` no longer tries to
+close a recursive multiply-add in one clock.
+
+### What changed in the module
+
+| | Before | After |
+|---|---|---|
+| Recursion | one clock, `x[n+1] = M x[n] + b[n]` | two clocks, `x[n+2] = M^2 x[n] + M b[n] + b[n+1]` |
+| State | `u, v` | two banks `uA/vA`, `uB/vB` holding even and odd sample indices |
+| Coefficients | `COEF_C`, `COEF_S` | plus **`COEF_C2` (0x28)** and **`COEF_S2` (0x2C)** |
+| Loop stages | one | `acc <= c2*u - s2*v` then `u <= clamp((acc + add) >>> SHIFT)` |
+| Drive | concatenated into the recursion | `c*d` and `s*d` registered outside the loop, summed into one ready-made addend |
+
+The two banks are one clock apart, so one is always in stage 1 while the other is in stage 2:
+both stages work every clock and the output still changes every clock. **The path genuinely
+crosses two clock edges, so no multicycle constraint is needed** - a clock enable would not have
+done, because static timing analysis is edge-based and would still have checked it in one.
+
+`COEF_C` and `COEF_S` are still required. They no longer drive the recursion, but they carry the
+`M b[n]` drive term, so **all four coefficients must be written**.
+
+### Verified before it was written, and again after
+
+`acquisition_custom/validate_resonator_pipelined.py` now contains a **cycle-exact model of the
+Verilog** - register for register, clock for clock, including the drive pipeline and the bank
+schedule. That is the point: a bank alignment or drive pairing one clock out still produces a
+resonance, just not the right one.
+
+| Check | Result |
+|---|---|
+| One clean resonance at the frequency asked for | 37.000, 39.940, 40.000, 22.000 MHz - exact |
+| Pole recovered from `(c2, s2)` vs pole produced | within 0.001 linewidths and 2.6% Q, against Step 1 tolerances of 0.20 and 5% |
+| Driven steady state, normal and hard drive | 0.03-0.05%; clip flag identical to the single-clock form |
+| Polyphase image at `fs/2 - f0` | 45.6 to 58.0 dB down |
+
+Also passing: `verify_rtl.py`, `validate_resonator_loop.py`, `validate_cic.py`,
+`validate_dds_mixer.py`, `validate_fir.py`, `stage0_analysis_selftest.py` (13/13),
+`verify_notebooks.py`, the notebook name audit, and all nine mock scenarios.
+
+The module was additionally parsed with **pyverilog** as a syntax check, with
+`red_pitaya_phaseshift.v` and `red_pitaya_acq_cic.v` as controls. That caught one thing: the
+first draft used `function signed [SW-1:0] clamp;`, which is legal Verilog-2001 but which the
+parser rejected. Replaced with four wires using the same conditional the single-clock version
+used - the rest of the module uses no functions, so this is also more consistent.
+
+### Software, changed to match
+
+- **`Emulator.config()`** writes four coefficients and reports the quantised pole **from c2 and
+  s2**, because that is the pole the hardware now realises. `arctan2` gives `2*w0` modulo `2*pi`
+  and `2*w0` passes `pi` above 31.25 MHz, so the branch is lifted onto the one nearest the
+  frequency asked for - which is known, because it produced the numbers.
+- **`delay` default 15 -> 13.** The module's own pipeline is two clocks longer, so 13 + 2 is the
+  board's real 15. Both call sites updated.
+- **`jupyter_notebooks/tests/fakehw.py`** decodes the pole the same way, so the off-board tests
+  exercise the same arithmetic as the board.
+
+### Known artefact, documented in the module header
+
+Two interleaved banks are the two polyphase components of one sequence, and quantisation stops
+their relative phase being exactly `w0`. The residue is a mirror line at `fs/2 - f0` - 22.5 MHz
+for a 40 MHz pole, 46 to 58 dB down. It cannot enter a measurement, because the receiver's clean
+window is +-12 kHz and the image sits megahertz away. It **will** appear in a wide band survey if
+the emulator is left enabled during one.
+
+### Still to do
+
+**Rebuild and read the slack.** The predicted stage delays are about 5.8 ns for stage 1 and
+3.5 ns for stage 2, both inside 8 ns, but that is an estimate from the routed report's own
+numbers and not a timing run. Expect roughly 10 DSP slices where there were 4, against 17 of 80
+used. Then re-run Step 1 and Step 4b and compare against `.bak18`: if the recovered Q moves, the
+old failing paths had been affecting the emulator and `MIN_AMP_FOR_FIT` needs re-deriving.
+
+And build through `build_project.tcl`, not the Vivado GUI - the 2026-08-07 rebuild left
+`bitstream_id.txt` unwritten and `build_id.vh` stale at `0x096CEAD0`.
+
+---
+
+## 2026-08-07 — The single-clock recursion cannot close on this device. The numbers now say so
+
+The rebuild moved WNS from **-6.907 ns to -3.482 ns** and TNS from -6290 to -1403.9, with failing
+endpoints down from 6224 to 3211. The drive-before-shift change did what it was meant to. What
+it exposed is that the remaining distance is not made of removable logic.
+
+### Where the time goes now
+
+The worst path moved from the u recursion to the **v** recursion, which the last change did not
+touch - v has no drive term, so its `+ ROUND` was left alone:
+
+```
+Source      i_reso/v_reg[2]/C        Destination  i_reso/v_reg[15]/R
+Data Path   10.865 ns                Logic Levels 11 (CARRY4=7 DSP48E1=2 LUT1=1 LUT5=1)
+
+    FDRE C->Q                     0.518
+    route into DSP                0.692
+    DSP48E1  A[2] -> PCOUT[47]    4.036    <- multiply + ALU
+    cascade net                   0.002
+    DSP48E1  PCIN[47] -> P[16]    1.518    <- second ALU
+    route                         0.961
+    LUT1                          0.124    <- carry-in taken from P[16]
+    CARRY4 x 7                    1.234    <- ROUND propagating up to bit 42
+    route + setup                ~1.780
+                                -------
+                                 10.865   against 7.907 available
+```
+
+Two separate findings, and only one of them is fixable by rearranging logic.
+
+**Vivado is already doing the right thing with the DSPs.** `cv` produces PCOUT and `v_nxt0`
+consumes PCIN, so `su + cv` is computed in two cascaded DSP48E1s with no fabric adder between
+them. There is nothing left to hand it.
+
+**The `+ ROUND` is in fabric, and it is not an adder.** It is a +1 at bit 16 whose carry then
+has to propagate up to bit 42 - a LUT1 generating the carry from `P[16]` and seven CARRY4 levels
+carrying it. 1.358 ns to add a single constant bit, because it lands below the shift point and
+the DSP has already closed its books.
+
+**And the part that decides it:** the two cascaded DSP stages cost **5.554 ns between them**.
+Add the flip-flop's 0.518, the 0.692 route into the first DSP, and the 1.780 of route and setup
+at the far end, and the floor is **8.546 ns against 7.907 available - still -0.639 ns with every
+removable gate deleted**. A rotation is two products summed, so two DSP stages is the minimum
+depth. **The single-clock recursion cannot close at 125 MHz on this part, however the fabric
+around it is arranged.** That is now arithmetic from the routed report, not an opinion.
+
+### The fix, and what testing says about it
+
+Two-way look-ahead. A register cannot go inside a recursive loop, but two samples can be
+computed per update with the extra clock absorbed into the coefficients:
+
+```
+x[n+1] = M x[n] + b[n]                      M = (1/2^S)[[c,-s],[s,c]] = r Rot(w0)
+x[n+2] = M^2 x[n] + M b[n] + b[n+1]         M^2 = r^2 Rot(2 w0)
+```
+
+so the squared coefficients come out of software exactly the way `c` and `s` already do -
+`c2 = r^2 cos(2w0) 2^S`, `s2 = r^2 sin(2w0) 2^S`. Two interleaved state banks, even and odd,
+each updated on alternate clocks, gives each update **16 ns for the same 10.865 ns of logic:
++5.042 ns of slack**. Every term after the two products depends only on registered inputs, so it
+sits outside the loop and can be pipelined freely.
+
+New: `acquisition_custom/validate_resonator_pipelined.py`. Bit-accurate models of both forms,
+including truncation and sign extension at every wire width. Bit-equality is the wrong test here
+- `c2, s2` quantise separately and the rounding lands once per two samples instead of twice - so
+what it checks is whether the emulator is still the same instrument:
+
+| Check | Result |
+|---|---|
+| One clean resonance at the frequency asked for | 37.000, 39.940, 40.000, 22.000 MHz - all exact |
+| The pole recovered from `(c2, s2)` matches the pole produced - which is what the Step 1 self-test compares against | inside 0.001 linewidths and 2.6% on Q, against tolerances of 0.20 and 5% |
+| Driven steady-state amplitude, normal and hard drive | agrees to 0.03-0.05%; clip flag identical |
+| Polyphase image at `fs/2 - f0` | 45.9 to 57.0 dB below the peak |
+
+**The image is inherent to the architecture and is worth naming.** Two interleaved banks are the
+two polyphase components of one sequence; if their relative phase is not exactly `w0` - and
+quantisation guarantees it is not - the residue appears as a mirror line at `fs/2 - f0`. At
+40 MHz that is 22.5 MHz, 45.9 dB down. It cannot enter any measurement: the receiver's clean
+window is +-12 kHz and the image sits 17.5 MHz away. But it will appear in a Step 2 band survey
+if the emulator is ever left enabled during one, and it should be in the module header rather
+than discovered later.
+
+### One measurement trap this script walked into first, recorded so it is not repeated
+
+The first version measured f0 and Q by Fourier transform of the impulse response and reported
+Q = 4864 for a resonator configured at Q = 250 - in every case, for both forms. A Q = 250
+resonator at 37 MHz decays in `Q/(pi f0)` = 2.15 us, which is 269 samples, and the transform was
+65536 points long: it was measuring the width of the Hanning window, not the resonator. Replaced
+with a least-squares linear-prediction fit of `y[n] = a1 y[n-1] + a2 y[n-2]`, which recovers the
+poles directly and is immune to windowing. **A Fourier transform much longer than the ringing
+measures the window.**
+
+### Status
+
+The design is validated; the Verilog is not yet written. Also outstanding from the same rebuild:
+
+- **`bitstream_id.txt` was not written and `build_id.vh` was not regenerated** - it still reads
+  `GEN_BUILD_ID = 32'h096CEAD0` from 2026-08-03 22:06. So this bitstream reports the **same
+  fingerprint as the one it replaces**, and `check_system.py` will report "could NOT be
+  verified". That is the Vivado-GUI path the 2026-08-03 entry documents. Rebuild through
+  `build_project.tcl` before loading, or there will be two different bitstreams both claiming
+  0x096CEAD0.
+- The one non-resonator failing path is `ps/system_i/axi_protocol_converter` at **-0.028 ns** on
+  `clk_fpga_3`, a single endpoint inside Xilinx IP. Worth a glance, not worth a redesign.
+
+---
+
+## 2026-08-06 — The one-clock recursion had two adders in series. One of them was wiring all along
+
+`bitstream_id.txt` had been carrying its own verdict since 2026-08-03:
+
+```
+# timing   : *** FAIL *** worst slack -6.907 ns, 2000 failing path(s)
+# WARNING  : this bitstream does not meet timing. Measurements taken
+#            from it cannot be trusted, whatever the fingerprint says.
+```
+
+The `md5sum` of the bitstream on the board matches `impl_1/red_pitaya_top.bit`, so the board is
+running that build. Every published coil number came from it.
+
+### Why the fingerprint could not have told us
+
+`BUILD_ID` is an FNV-1a hash of six **source files** (`build_project.tcl` lines 270-279). Two
+different builds of identical source produce an identical fingerprint. So register `0x48`
+answers "which source", never "which build" and never "did it meet timing" - and the timing
+verdict lives only in a comment line in a text file on the PC, which never reaches the board.
+`check_system.py`'s "OK, build fingerprint 0x..." is therefore weaker than it reads. Noted as a
+gap; the fix is a separate `BUILD_STAMP` register carrying the build time and a timing-passed
+bit, so the board can say *"running the build of 2026-08-03 22:14, which FAILED timing"*.
+
+### The diagnosis
+
+With `SW = 25`, `CW = 18`, `SHIFT = 17`, the recursion was
+
+```
+u ──DSP──► c*u ──┐
+v ──DSP──► s*v ──┴─► (cu - sv + ROUND) ──► >>> 17 ──► + drive_r ──► sat ──► u
+                        43-bit adder                   26-bit adder
+                        11 CARRY4                      7 CARRY4
+```
+
+11 + 7 = **18 CARRY4**, and the routed report shows exactly `CARRY4=18 DSP48E1=2`, data path
+14.131 ns against 8.000 ns. Two adders in series inside a loop that must close in one clock.
+
+The 2026-08-03 saturation change had already removed the overflow comparator's carry chain from
+this path. What it left behind were the two *arithmetic* adders, and the note it ended with -
+*"this shortens the loop but does not by itself make it close in 8 ns"* - was correct.
+
+### The fix
+
+The second adder need not be in the loop at all. For integers,
+
+```
+floor(X / 2**S) + D  ==  floor((X + D*2**S) / 2**S)
+```
+
+so the drive can be added **before** the shift. And `ROUND` is a single 1 at bit `SHIFT-1` while
+`drive_r << SHIFT` has nothing below bit `SHIFT`, so their sum is a **concatenation** - not an
+adder, not even a lookup table:
+
+```verilog
+ROUND + (drive_r <<< SHIFT)  ==  {drive_r, 1'b1, {(SHIFT-1){1'b0}}}
+```
+
+`red_pitaya_resonator.v` now reads
+
+```verilog
+wire signed [SW+CW: 0] drive_round =
+    $signed({{(SW+CW+1-18-SHIFT){drive_r[17]}}, drive_r, 1'b1, {(SHIFT-1){1'b0}}});
+wire signed [SW+CW: 0] u_acc = cu - sv + drive_round;
+wire signed [SW: 0]    u_nxt = (u_acc >>> SHIFT);
+```
+
+One 26-bit carry chain leaves the recursion and becomes wiring. Seven of the path's twenty-three
+logic levels are gone.
+
+### Verified equivalent, not approximately
+
+New: `acquisition_custom/validate_resonator_loop.py`. It models both forms bit-accurately -
+including the Verilog truncation and sign-extension at every wire width - and compares them:
+
+| Check | Result |
+|---|---|
+| Exhaustive at reduced widths (`SW=6, CW=5`) | 1,464,320 combinations, 0 mismatches |
+| Random at the real widths | 400,000 trials including every corner, 0 mismatches |
+| Full 20,000-sample runs at 37 MHz/Q=250, 39.94 MHz/Q=180, and 40 MHz/Q=5000 driven into saturation | bit-identical output and clip flag in all three |
+
+The script also predicts the carry-chain count from the widths and prints `11 + 7 = 18`, which is
+what made the diagnosis certain rather than plausible: it matches the routed report exactly.
+
+`tools/verify_rtl.py` passes; `stage0_analysis_selftest.py` passes 13 of 13.
+
+### Status - NOT yet closed
+
+**This is an equivalence proof, not a timing result.** Whether the shorter path closes 8 ns is a
+question for Vivado. The other large term is the unregistered DSP multiply, which this change
+does not touch, and an `A*B -> P` path with no internal pipeline registers is several nanoseconds
+on a -1 speed grade part. A single-clock recursive multiply-add at 125 MHz is marginal by
+construction.
+
+**Rebuild and read the slack.** If it is still negative, the recursion needs pipelining, and the
+design is written up in `EXTERNAL_VERIFICATION_PLAN.md` section 1.1b: two-way look-ahead, where
+`x[n+2] = M**2 x[n] + M b[n] + b[n+1]` and `M**2 = r**2 Rot(2w0)`, so the squared coefficients are
+computed in software exactly the way `c` and `s` already are. Two interleaved state banks updated
+on alternate clocks give each update 16 ns. Costs about 12 DSP slices instead of 4, against 17 of
+80 currently used.
+
+### Also still open
+
+The summary report details only its ten worst paths, all in `i_reso`. But 6,224 of 29,573
+endpoints fail - twenty-one percent of the design, far more than `i_reso`'s own register count -
+so the earlier claim that the failures are "all in the resonator's recursive loop" is **not
+established**. Run
+
+```tcl
+report_timing -from [get_cells i_ps/*]  -max_paths 50 -slack_lesser_than 0
+report_timing -from [get_cells i_acq/*] -max_paths 50 -slack_lesser_than 0
+```
+
+If both are clean, the coil measurements stand: `i_reso` is disabled throughout Steps 2-8, its
+registers do not toggle, and a quiescent path cannot capture a wrong value. Only the Step 1 and
+9a self-tests and the Step 4b fitter calibration are affected - which is bad enough, since the
+self-test is the notebook's entire guarantee of instrument integrity. If either returns paths,
+the coil numbers are in question too.
+
+---
+
+## 2026-08-06 — The coil notebook now measures its own calibrations; two guardrail bugs found by putting it under test
+
+The bench coil notebook carried a configuration cell full of numbers that had been
+measured once and typed back in: the amplifier's gain, the working drive, the
+coarse search step, an off-board vector network analyser's answer for `f0` and `Q`.
+That is fine on a bench where nothing changes. It is wrong for a resonator that
+will go into a trap and then into a cryostat, because **a constant copied from a
+previous session is a wrong answer waiting to be believed** — and nothing in the
+notebook could tell the difference.
+
+Renamed `Test - Coil wo Amplifier.ipynb` → **`Test - Resonator Coil
+Characterisation.ipynb`**, and reworked it so every calibration is measured and
+adopted at run time.
+
+### The Step 4 group, reordered so each step runs on the previous one's measurement
+
+Previously: signal budget, then the L/C cross-check, then the amplifier ladder,
+then the drive-window scan — with the last two ending in *"set this and re-run
+from Step 3"*. Nobody re-runs from Step 3. Every number in Steps 5–8 therefore
+belonged to a drive that had been superseded four cells earlier.
+
+| was | is | what it now does |
+|---|---|---|
+| Step 4c | **Step 4a** | Amplifier gain ladder. Adopts the measured gain and recomputes `DRIVE_LINEAR_MAX` from it |
+| Step 4d | **Step 4b** | Drive window. Adopts the top of the window as `DRIVE_FRAC`, then **re-runs the Step 3 refine-and-fit at it** |
+| Step 4 | **Step 4c** | Signal budget, re-measured at the adopted drive |
+| Step 4b | **Step 4d** | The coil against its known L and C, using the final `f0` and `Q` |
+
+`refine_and_fit()` and `measure_transfer()` were factored out of Step 3 and Step 4
+so that the re-measurement is the *same code path*, not a copy of it. `AUTO_CALIBRATE`
+turns the adoption off for anyone who wants the old behaviour.
+
+Also removed: the hardcoded `4.46 / 0.21` noise ratio printed by Step 8d, which was
+a figure from an earlier run; it now comes from Step 4c's own calculation. And the
+Step 7 drift verdict, which compared against a remembered "7-minute scan", now
+computes the Step 8c map's cost from `FB_MAP_*` as configured.
+
+### Two bugs the mock found, both in guardrails
+
+**1. The search could report noise as a discovery.** Step 3's coarse pass accepted a
+candidate on contrast alone — 6 dB above the band median. But `|z|²` on an empty band
+is exponentially distributed, so the largest of 350 points sits about **8 dB above the
+median whatever the averaging**: the ratio is scale-free, and more averaging does not
+move it. A 6 dB threshold passes pure noise. On a resonator narrow enough that the
+100 kHz coarse grid stepped over it, the search reported the biggest noise excursion
+in the band, at 54.1 MHz, and the automatic step-halving never fired because the noise
+had already "passed".
+
+Fixed by confirming a candidate before committing to it: scan the neighbourhood twice
+and **correlate the two scans**. A resonance puts the same shape on the grid both
+times; two realisations of noise are independent and correlate at zero give or take
+1/√N. Correlation rather than "do the two maxima agree", because the top of a broad
+line is flat and its argmax wanders by a good fraction of a linewidth while a narrow
+line's does not — one threshold cannot serve both. The contrast figure is now measured
+against the *coarse* pass's median, not the zoomed window's: on a line wider than the
+window the local median is most of the way up the peak, and a perfectly good resonance
+measures 2 dB of contrast against itself.
+
+**2. Adoption could loosen a ceiling on the strength of a noisy measurement.** With an
+amplifier declared but not fitted, the gain ladder measured +9.5 dB of nothing in
+particular, and the new auto-adopt logic dutifully raised `DRIVE_LINEAR_MAX` from
+0.0065 to 0.106 — a 24 dB loosening derived from noise. Adoption may now **tighten** a
+ceiling freely but refuses to loosen one: a measured gain more than 3 dB *below* the
+declared figure is reported and discarded, and the stricter declared value kept. The
+causes — amplifier absent, unpowered, cable off, signal in the noise — are all safe
+under the tighter limit and unsafe under the looser one. A measured gain more than
+3 dB *above* the declared one still aborts, as before.
+
+### The vector network analyser is gone
+
+`VNA_F0` and `VNA_Q` held a single measurement from a single day. Every reference is
+removed — the configuration entries, the Step 4d comparison block, the summary table
+row, the JSON keys and the prose. The agreement table now compares the swept fit
+against the alternate-decimation fit, both taken this run.
+
+### Step 8d sweeps each setting on its own span
+
+Feedback narrows the line by 1/(1−K), so across the family the linewidth spans more
+than an order of magnitude — 28 to 414 kHz on the mock. A span fixed at the unfed
+linewidth puts three points across the narrowest curve, and three points do not look
+like a Lorentzian. Each setting now gets a span predicted from the Step 8b slope, then
+refined by a second pass around what the first pass actually found. The figure has two
+panels, both scaled from this run's fits: (a) from the widest fitted line, (b) centred
+and scaled on the **unfed** line, which is the curve the whole family is quoted
+against. Each curve carries its `Q` and resonant frequency in the legend, with the same
+numbers repeated as a table underneath in the thesis's format.
+
+### Plots for every calibration
+
+A calibration with no figure is a calibration nobody checks. Added: the Step 4a gain
+ladder against the amplifier's rating, the Step 4b re-measured lineshape, the Step 5
+two-receiver overlay, the Step 6 linearity ladder, and a third Step 3 panel showing
+the confirmation scan. Thirteen figures per run, every axis limit derived at run time.
+
+### Prose cut by about a third
+
+The markdown went from 35.8k to 27.2k characters while *adding* ~2.5k describing the
+new automatic behaviour. Cut: the teaching narrative, a `fit_lorentzian` paragraph that
+appeared twice, and the stale references to the coherent-leakage dead end and the
+abandoned phase-width method. Kept: every warning, failure mode and physics
+justification that changes what the operator would do.
+
+### The off-board test harness, which was in `/tmp` and had been lost once
+
+Now in `jupyter_notebooks/tests/`, and it is what found both bugs above.
+
+| File | What it does |
+|---|---|
+| `fakehw.py` | A register-level mock. Patches `os.open`, `mmap.mmap` and `open`, so every line of the notebook's own driver code runs unmodified — the `Bus` class, the poison check, the DMA bounds readback, `tone_frac`'s least-squares projection. Only the silicon is fake |
+| `audit.py` | Walks the code cells statement by statement and flags any name read at module level before anything binds it. Catches ordering bugs runtime testing misses, because a name left over in a live kernel looks defined when it is not |
+| `run_mock.py` | Runs the whole notebook against the mock across a scenario matrix, saving every figure |
+
+Each scenario declares whether the notebook should **finish** or **refuse**, because a
+refusal is a pass when refusing is the right answer:
+
+| Scenario | Expected |
+|---|---|
+| `baseline`, `high_q`, `very_narrow`, `no_amp_declared`, `big_floor`, `noisy_but_averaged` | ok |
+| `amp_declared_absent`, `weak_coupling`, `too_noisy` | refuse |
+
+`too_noisy` must refuse *and* say that raising `N_AVG` is the fix; `noisy_but_averaged`
+is the same noise with the averaging raised, and proves that it is. 9 of 9 behave as
+expected.
+
+---
+
+## 2026-08-06 — Every notebook moved to `jupyter_notebooks/`
+
+Twenty-three notebooks were spread across `acquisition_custom/` and `phaseshift_custom/`,
+mixed in with the generators, source lists and validators that the Vivado build reads
+from the same folders. Split them apart:
+
+```
+jupyter_notebooks/
+├── acquisition/    20 notebooks + COIL_NOTEBOOK_HANDOVER.md, STAGE9_PLAN.md,
+│                   the Stage 10 atlas plot cell, and the one surviving backup
+├── phaseshift/     phase_shift_control.ipynb, scope_phase_check.ipynb
+└── tests/          the off-board harness above
+```
+
+**What did not move, and why.** `acquisition_custom/README.md` and `EXPLAINER.md` stayed:
+they document the register map rather than any notebook, four notebooks cite that exact
+path in their own text, and `build_project.tcl` reads other files from the same folder.
+`gen_fir_coeffs.py`, `add_acquisition_sources.tcl` and the `validate_*.py` files are part
+of the build and stayed with it.
+
+**References updated**, and each one checked to still resolve: `build_project.tcl`'s
+pre-build notebook check, `tools/run_on_board.ps1` (now searches both notebook folders by
+name, so the command in `START_HERE.md` is unchanged), `tools/verify_notebooks.py`,
+`tools/README.md`, `tools/backup.ps1`, `START_HERE.md`, `HANDOVER.md`, `BACKUP.md`, both
+folder READMEs, and four in-notebook citations of `phaseshift_custom/scope_phase_check.ipynb`.
+
+**One functional break, caught and fixed.** `acquisition_custom/stage0_analysis_selftest.py`
+loads live functions out of the Stage 10 notebook by reading the `.ipynb` from its own
+directory. It now resolves `../jupyter_notebooks/acquisition/` and raises a message naming
+the new location if the file is not there. It passes: 13 checks, 0 failed.
+
+**A false positive removed from `verify_notebooks.py`.** It reported `get_ipython` as
+"used before anything defines it" in any notebook that switches its matplotlib backend
+depending on whether it is under Jupyter — which is the correct way to write one. The
+name is injected by the IPython kernel, so it exists at run time and in no notebook at
+read time. Added to the builtin set. This predates the move; `build_project.tcl` had been
+printing a spurious notebook failure on every build, and a checker that cries wolf stops
+being read.
+
+### Housekeeping
+
+- **Notebook backups pruned from eighteen to one.** `.bak18` is kept — the version
+  immediately before this session's rework. The other seventeen are gone.
+- **`BITSTREAM_WORKFLOW.pdf` deleted**, being a second copy of `BITSTREAM_WORKFLOW.md`.
+  The five documents and one build script that pointed at the PDF now point at the
+  markdown.
+- **No other duplicates exist.** A hash sweep of every file outside `.git` and the Vivado
+  output directories found no byte-identical pairs.
 
 ---
 
