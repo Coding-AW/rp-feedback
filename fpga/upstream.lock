@@ -1,0 +1,8 @@
+repository=https://github.com/RedPitaya/RedPitaya-FPGA
+commit=fc268bd47cd029c20ec8a5194f16661902f6d650
+project=v0.94
+model=Z10
+board=STEMlab 125-14
+part=xc7z010clg400-1
+vivado=2020.1
+archive_sha256=18813c322b924f97f4c1c55d4a19253ee0e262240672117038ff19b738deb7b9

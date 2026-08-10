@@ -51,10 +51,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-RTL_DIRS = [
-    os.path.join(ROOT, 'Test_Project.srcs', 'sources_1', 'imports', 'rp', 'rtl', 'classic'),
-    os.path.join(ROOT, 'Test_Project.srcs', 'sources_1', 'imports', 'rp', 'prj', 'v0.94', 'rtl'),
-]
+RTL_DIRS = [os.path.join(ROOT, 'fpga')]
 
 #  Words that look like a module instantiation but are not.
 KEYWORDS = set("""
@@ -192,7 +189,7 @@ def instantiations(body):
 def main():
     sources = read_sources()
     if not sources:
-        sys.exit('No RTL found. Expected it under Test_Project.srcs/...')
+        sys.exit('No RTL found. Expected project-owned sources under fpga/.')
 
     user_types = find_user_types(sources)
 

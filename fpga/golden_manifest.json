@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "golden_build": "2026-08-07T18:34:40+01:00",
+  "hardware_id": "FE76AE09",
+  "files": {
+    "fpga/axi_master.v": "8eff0a7f86662c9e86e411ada37e1094815af9515ad3b7fc2c9b007cf8b86778",
+    "fpga/build_id.vh": "22b4ba98ca8e3e95af336563557ea5d55138305f62a7dd765f3746ef169667c5",
+    "fpga/fir_coeffs.vh": "de5dcb7a6841949009b09d216c93b4bed877a18c29cfc8f66ebf9dd3ccd0dbad",
+    "fpga/fir_params.vh": "b3d7bc2015b834adfc9794ab687ef43562fdc0b41e9d15612581eeb38b480d8a",
+    "fpga/project.xdc": "f6b8febfe0a0a39201d3dc5de1ae39b242573b85973cfb856c6f96abb6f19e55",
+    "fpga/red_pitaya.xdc": "086eae6bce739d1db4b718c1ce27b7bd65d1ad3b481c6fb8d66a5565f031bcae",
+    "fpga/red_pitaya_acq.v": "9a52c1e379df6521a4369e234dcf5260147dc60c09a7bc3081c4b3442610a97d",
+    "fpga/red_pitaya_acq_cic.v": "2a28f1efe8671e310ecaa044d2ae271a796ba90cb873b2cd6487129e07a7ee4b",
+    "fpga/red_pitaya_acq_dds.v": "7c21cf3d2985b0a70a4fa4748d4665877fe67724db8538169e7965d225ae4ddc",
+    "fpga/red_pitaya_acq_dma.v": "1f058f0bdf34495a3bf0081047af43181cd98ee029719df8402dac8e90a86e43",
+    "fpga/red_pitaya_acq_fir.v": "a91609ba696514f2fbd6c54c01ab81aef3645124470ecf2775eaf8c3fc1ff3f0",
+    "fpga/red_pitaya_acq_mixer.v": "54940b3bedbf06c6c43865bedfe96a3cf15d2943ac542232873aedb2ef6d6f06",
+    "fpga/red_pitaya_impl.xdc": "e5b3814106bcb98369d863c14d24ce7914841f4d01b18022d176c1fa7fa150ae",
+    "fpga/red_pitaya_phaseshift.v": "77fa196eaf96d985e06d3650b7172941abba7cd2af81e6e0b6144d532157fe37",
+    "fpga/red_pitaya_resonator.v": "ecf0d509ee8d4c6d4c947001bdcc016e4c3d429a76f6bdd65502d880647e1c1a",
+    "fpga/red_pitaya_scope.v": "c5fc34bf41acd540ed8be8ef53c3d3b37b8a0c192ca086e5a76460f46967a88d",
+    "fpga/red_pitaya_sequencer.v": "0963f70f0a8eb56a31774413e43b02311bba38cf06cd16f2978b7d21b59ce52e",
+    "fpga/red_pitaya_top.sv": "1cb904d9b16ae846a847dc31591fc994d75ab88b0b0434c32366d9cc58a90029"
+  }
+}

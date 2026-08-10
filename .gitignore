@@ -18,6 +18,8 @@
 # =============================================================================
 
 # --- Vivado's build output: 36 MB, rebuilt every time ------------------------
+.cache/
+build/
 Test_Project.runs/
 Test_Project.cache/
 Test_Project.hbs/
@@ -52,6 +54,8 @@ results/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+tests/python/figs/
+bench_coil_results.json
 *~
 *.swp
 .vscode/
