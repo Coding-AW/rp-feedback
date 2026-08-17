@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Acquisition-safety and separate analyser-envelope tests."""
+"""Standalone Red Pitaya workflow and legacy analyser-envelope tests."""
 import contextlib
 import io
 import json
@@ -193,64 +193,39 @@ def test_analysis(a, scratch, created):
 
 
 def test_acquisition(g):
-    for name in ('external_q_prepare', 'external_q_replay',
-                 'external_shift_prepare', 'external_shift_replay'):
-        assert callable(g[name]), name
-    for removed in ('external_q_load', 'external_q_plot', 'external_q_summary',
-                    'external_shift_campaign', 'external_shift_phase_campaign'):
+    """The browser-only workflow produced verified results and shut down."""
+    for removed in ('external_q_prepare', 'external_q_replay',
+                    'external_shift_prepare', 'external_shift_replay'):
         assert removed not in g, removed
-    assert g['FB_EXT_REPEATS'] == 4
+    assert g['Q_RECOMMENDATION'] is not None
+    assert g['SHIFT_RECOMMENDATION'] is not None
+    assert g['Q_RECOMMENDATION']['valid']
+    assert g['SHIFT_RECOMMENDATION']['valid']
+    assert g['Q_RECOMMENDATION']['q_ratio'] > 1.0
+    assert abs(g['SHIFT_RECOMMENDATION']['shift_over_b0']) > 0.1
+    assert len(g['VERIFY_RECORDS']) == 6
+    assert 'measured once / mapped' in g['REPORT_TEXT']
+    assert 'extrapolated; not approached' in g['REPORT_TEXT']
 
-    state = g['external_q_prepare'](0.0)
-    state['freqs'] = np.linspace(state['freqs'].min(), state['freqs'].max(), 121)
-    prepare = g['external_q_prepare']
-    g['external_q_prepare'] = lambda frac, monitor_shift=0: state
-    g['external_q_replay'](0.0, repeats=2, dwell=1e-9)
-    g['external_q_prepare'] = prepare
     board = run_notebook_mocks.fakehw._BOARD
-
-    shift_state = g['external_shift_prepare'](90, 0.6)
-    assert shift_state['step_hz'] <= g['LW']/32.0*(1+1e-12)
-    assert shift_state['half_span_hz'] >= 4*g['LW']
-    assert shift_state['A'] == 0.6*g['FB_GAIN_CEIL']
-    g['all_off']()
-    must_fail(lambda: g['external_shift_replay'](90, 0.6, repeats=0),
-              ('repeats',))
-    must_fail(lambda: g['external_shift_prepare'](90, 0.951), ('gain_frac',))
-    g['external_shift_replay'](270, 0.4, repeats=1, dwell=1e-9,
-                               half_span_hz=4*g['LW'], step_hz=g['LW']/32)
-
-    real_freq = g['gen'].freq; calls = [0]
-    def corrupt_after_three(frequency):
-        result = real_freq(frequency); calls[0] += 1
-        if calls[0] == 3:
-            g['ps'].w(0x00, g['ps'].r(0x00) ^ 1)
-        return result
-    g['gen'].freq = corrupt_after_three
-    must_fail(lambda: g['external_q_replay'](0.70, repeats=1, dwell=1e-9),
-              ('changed',))
-    g['gen'].freq = real_freq
-    real_clip = g['ps'].monitor_clipped
-    g['ps'].monitor_clipped = lambda: True
-    must_fail(lambda: g['external_q_replay'](0.0, repeats=1, dwell=1e-9),
-              ('clipped',))
-    g['ps'].monitor_clipped = real_clip
     assert board._r(board.GEN, 0x04) == 0
     assert board._r(board.PS, 0x00) == board._r(board.PS, 0x04) == 0
     assert (board._r(board.PS, 0x18) & 0x3F) == 0
-    assert (board._r(board.SEQ, 0x00) & 4) == 0
     assert board._r(board.ACQ, 0x00) == 0
     assert (board._r(board.EMU, 0x00) & 1) == 0
 
 
 def main():
+    generated = [os.path.join(ROOT, name) for name in
+                 ('bench_coil_results.json', 'bench_coil_traces.npz',
+                  'bench_coil_report.md')]
     with contextlib.redirect_stdout(io.StringIO()):
         errors, _, hardware = run_notebook_mocks.run(
             'baseline', stop_on_error=True, savefigs=False, return_globals=True)
     assert not errors, errors
     analysis = analysis_namespace()
     scratch = os.path.join(ROOT, 'build'); os.makedirs(scratch, exist_ok=True)
-    created = []
+    created = list(generated)
     try:
         test_analysis(analysis, scratch, created)
         test_acquisition(hardware)
@@ -258,7 +233,7 @@ def main():
         for path in created:
             if os.path.exists(path):
                 os.remove(path)
-    print('PASS: separate analyser fitting and safe acquisition tests')
+    print('PASS: standalone Red Pitaya workflow and legacy analyser fitting tests')
 
 
 if __name__ == '__main__':

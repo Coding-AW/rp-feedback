@@ -115,6 +115,7 @@ function Run-Tests {
     Invoke-Native $exe ($prefix + @((Join-Path $Root 'tools\verify_notebooks.py')) + $notebooks)
     Invoke-Native $exe ($prefix + @((Join-Path $Root 'software\validation\stage0_analysis_selftest.py')))
     Invoke-Native $exe ($prefix + @((Join-Path $Root 'tests\python\audit_notebooks.py')))
+    Invoke-Native $exe ($prefix + @('-m', 'unittest', 'tests.python.test_first_order_feedback'))
     Invoke-Native $exe ($prefix + @((Join-Path $Root 'tests\python\test_external_q.py')))
 }
 
