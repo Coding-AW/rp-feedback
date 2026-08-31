@@ -16,7 +16,7 @@
  *  Present:
  *      ADC tap -> IQ mixer -> CIC decimators -> peek registers / scope tap
  *
- *  Still to come (see docs/acquisition.md):
+ *  Still to come:
  *      -> FIR droop corrector -> 64-bit packing -> FIFO -> DMA -> DDR
  *
  *  The chain is deliberately usable BEFORE the memory path exists. The peek
@@ -45,7 +45,7 @@
  *  All registers are 32 bits and MUST be accessed one 32-bit word at a time.
  *  A bulk mmap slice from Python becomes a burst transfer that the GP-AXI to
  *  system-bus bridge cannot acknowledge; it locks the bus and reboots the
- *  board. (Same rule as the phase shifter - see docs/feedback.md.)
+ *  board. The feedback path remains independent and latency-bounded.
  *
  *  Offset  Name        R/W  Contents
  *  ------  ----------  ---  ----------------------------------------------------
@@ -114,7 +114,7 @@
  *  0x40 and 0x44 - no rebuild, no new bitstream. Disable the chain first
  *  (CTRL = 0), write all of them, then reset and enable: a pass takes 155 clocks
  *  and reads the memory throughout, so changing it midway mixes two filters.
- *  See notebooks/acquisition/fir_filter_designer.ipynb.
+ *  Coefficients are retained in the qualified FPGA overlay.
  *
  *  Any other offset reads as zero.
  *

@@ -2,7 +2,7 @@
 """
 Check the notebooks for things that cannot possibly work, without running them.
 
-    python3 tools/verify_notebooks.py notebooks/acquisition/*.ipynb
+    python3 tools/verify_notebooks.py notebooks/*.ipynb
 
 WHY THIS EXISTS
 ---------------

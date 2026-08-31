@@ -714,7 +714,7 @@ red_pitaya_pid i_pid (
 //  work done in stage 1.
 //
 //  Sits on system-bus slot sys[6], base address 0x40600000. Full register map
-//  is in the header of red_pitaya_acq.v and in docs/acquisition.md.
+//  is in the header of red_pitaya_acq.v.
 //
 //  Starts DISABLED at power-on: it does nothing at all until software sets the
 //  enable bit, so adding it cannot change existing behaviour.

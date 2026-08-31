@@ -1,7 +1,7 @@
 // ==========================================================================
 //  Filter sizes - GENERATED FILE, DO NOT EDIT
 //
-//  Produced by software/validation/gen_fir_coeffs.py, which is the single
+//  Retained with fir_coeffs.vh as the qualified handover parameter set; this is the single
 //  source of truth for these numbers. Included by red_pitaya_acq_fir.v
 //  (which builds the filter) and red_pitaya_acq.v (which decides when the
 //  filter is too slow for the chosen decimation and must be bypassed).

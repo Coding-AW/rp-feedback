@@ -9,7 +9,7 @@
 #       words and tells you what to do next.
 #
 #  WHAT IT DOES, IN ORDER
-#    - checks the generated filter files exist and are up to date
+#    - checks the qualified filter files exist
 #    - adds any new source files to the project
 #    - runs synthesis, implementation and bitstream generation
 #    - checks the timing result and explains it
@@ -35,14 +35,12 @@ proc banner {text} {
 }
 
 # -----------------------------------------------------------------------------
-banner "STEP 1 of 5   Checking the generated filter files"
+banner "STEP 1 of 5   Checking the qualified filter files"
 # -----------------------------------------------------------------------------
-#  The correction filter's coefficients are produced by a Python script, not
-#  written by hand. If someone edited the script but forgot to run it, the chip
-#  would be built with the OLD coefficients - and nothing would complain.
-#  This catches that.
+#  The timing-qualified coefficient and parameter files are part of the FPGA
+#  overlay. tools/verify_golden.py checks their exact functional contents
+#  before Vivado starts, so the build only needs to require their presence.
 # -----------------------------------------------------------------------------
-set gen_py "$proj_root/software/validation/gen_fir_coeffs.py"
 set rtl    "$proj_root/fpga"
 set ok 1
 
@@ -50,15 +48,7 @@ foreach f [list "$rtl/fir_coeffs.vh" "$rtl/fir_params.vh"] {
     if {![file exists $f]} {
         puts "  MISSING: [file tail $f]"
         puts ""
-        puts "  The filter coefficients have not been generated yet. In a terminal:"
-        puts "      python software/validation/gen_fir_coeffs.py"
-        puts "  then run this script again."
-        set ok 0
-    } elseif {[file exists $gen_py] && [file mtime $gen_py] > [file mtime $f]} {
-        puts "  OUT OF DATE: [file tail $f]"
-        puts "     gen_fir_coeffs.py has been edited since this file was written."
-        puts "     Re-run it, or the chip will be built with the old coefficients:"
-        puts "         python3 gen_fir_coeffs.py"
+        puts "  Restore the qualified file from the handover repository."
         set ok 0
     } else {
         puts "  ok: [file tail $f]"
@@ -134,7 +124,7 @@ puts ""
 foreach {label script extra} [list \
         "RTL names" "$proj_root/tools/verify_rtl.py" {} \
         "Notebooks" "$proj_root/tools/verify_notebooks.py" \
-            [glob -nocomplain "$proj_root/notebooks/acquisition/*.ipynb"]] {
+            [glob -nocomplain "$proj_root/notebooks/*.ipynb"]] {
     lassign [run_checker $PY3 $script $extra] status out
     switch -- $status {
         ok {

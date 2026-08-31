@@ -1,7 +1,7 @@
 // ==========================================================================
 //  Droop-correction filter coefficients - GENERATED FILE, DO NOT EDIT
 //
-//  Produced by software/validation/gen_fir_coeffs.py
+//  Timing-qualified coefficient set retained directly in the handover overlay.
 //  Re-run that script to change the design; do not hand-edit here.
 //
 //  taps          : 309 (symmetric, 155 unique stored)

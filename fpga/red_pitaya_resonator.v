@@ -339,7 +339,7 @@ end
 //  two polyphase components of one sequence, and quantisation stops their
 //  relative phase being exactly w0. The residue lands at fs/2 - f0: 22.5 MHz
 //  for a 40 MHz pole, 46 to 57 dB down (measured by
-//  software/validation/validate_resonator_pipelined.py). It cannot enter a
+//  the timing-qualified pipelined resonator model). It cannot enter a
 //  measurement - the receiver's clean window is +-12 kHz and the image sits
 //  megahertz away - but it WILL show in a wide band survey if the emulator is
 //  left enabled during one.

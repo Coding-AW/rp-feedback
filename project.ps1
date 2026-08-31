@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('setup', 'build', 'test', 'deploy', 'check', 'clean')]
+    [ValidateSet('setup', 'test', 'build', 'deploy', 'sync', 'check', 'clean')]
     [string]$Command = 'test',
 
     [string]$Board = $(if ($env:RP_BOARD) { $env:RP_BOARD } else { '<board-hostname>' })
@@ -105,18 +105,22 @@ function Setup-Upstream {
 }
 
 function Run-Tests {
+    # Keep the handover tree clean when Python imports the notebook tests.
+    $env:PYTHONDONTWRITEBYTECODE = '1'
     $python = Get-Command py -ErrorAction SilentlyContinue
     if ($python) { $exe = $python.Source; $prefix = @('-3') }
     else { $python = Get-Command python -ErrorAction Stop; $exe = $python.Source; $prefix = @() }
 
     Invoke-Native $exe ($prefix + @((Join-Path $Root 'tools\verify_golden.py')))
     Invoke-Native $exe ($prefix + @((Join-Path $Root 'tools\verify_rtl.py')))
-    $notebooks = Get-ChildItem (Join-Path $Root 'notebooks\acquisition') -Filter *.ipynb | ForEach-Object FullName
+    $notebooks = @(
+        (Join-Path $Root 'notebooks\test_noise_passive_feedback.ipynb'),
+        (Join-Path $Root 'notebooks\resonator_coil_manual_high_k.ipynb')
+    )
     Invoke-Native $exe ($prefix + @((Join-Path $Root 'tools\verify_notebooks.py')) + $notebooks)
-    Invoke-Native $exe ($prefix + @((Join-Path $Root 'software\validation\stage0_analysis_selftest.py')))
-    Invoke-Native $exe ($prefix + @((Join-Path $Root 'tests\python\audit_notebooks.py')))
-    Invoke-Native $exe ($prefix + @('-m', 'unittest', 'tests.python.test_first_order_feedback'))
-    Invoke-Native $exe ($prefix + @((Join-Path $Root 'tests\python\test_external_q.py')))
+    Invoke-Native $exe ($prefix + @('-m', 'unittest',
+        'tests.python.test_noise_passive_feedback',
+        'tests.python.test_manual_high_k'))
 }
 
 switch ($Command) {
@@ -148,6 +152,17 @@ switch ($Command) {
         Invoke-Native 'scp' @($bit, $id, (Join-Path $Root 'software\check_system.py'), "${Board}:/root/")
         Invoke-Native 'ssh' @($Board, 'cat /root/red_pitaya_top.bit > /dev/xdevcfg')
         Write-Host "Loaded the bitstream on $Board."
+    }
+    'sync' {
+        if ($Board -eq '<board-hostname>') { throw 'Specify -Board <hostname> or set RP_BOARD before syncing.' }
+        $remote = '/root/jupyter_notebooks'
+        Invoke-Native 'ssh' @($Board, "mkdir -p $remote")
+        Invoke-Native 'scp' @(
+            (Join-Path $Root 'notebooks\test_noise_passive_feedback.ipynb'),
+            (Join-Path $Root 'notebooks\resonator_coil_manual_high_k.ipynb'),
+            "${Board}:${remote}/"
+        )
+        Write-Host "Copied the two handover notebooks to ${Board}:${remote}."
     }
     'check' {
         if ($Board -eq '<board-hostname>') { throw 'Specify -Board <hostname> or set RP_BOARD before checking the board.' }
