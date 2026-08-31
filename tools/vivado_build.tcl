@@ -636,7 +636,7 @@ if {[file exists $bit] && !$timing_ok} {
     puts "  NEXT STEPS"
     puts "    1. Copy it to the board: .\\project.ps1 deploy"
     puts "    2. Check the right one loaded: .\\project.ps1 check"
-    puts "    3. Run the test notebooks in order, starting from Test Stage 2."
+    puts "    3. Sync and run test_noise_passive_feedback.ipynb in order."
 } else {
     puts "  NO BITSTREAM WAS PRODUCED."
     puts ""

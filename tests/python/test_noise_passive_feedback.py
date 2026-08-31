@@ -108,6 +108,15 @@ def calibration(**changes):
 
 
 class ElectrodeFeedbackTests(unittest.TestCase):
+    def test_notebook_build_id_matches_fpga_header(self):
+        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
+            notebook_source = json.dumps(json.load(handle))
+        header = os.path.join(ROOT, 'fpga', 'build_id.vh')
+        with open(header, encoding='utf-8') as handle:
+            header_source = handle.read()
+        self.assertIn("BUILD_ID_EXPECTED = '0xFE76AE09'", notebook_source)
+        self.assertIn("32'hFE76AE09", header_source)
+
     def test_dedicated_notebook_is_fail_closed_and_keeps_out2_as_monitor(self):
         path = os.path.join(ROOT, 'notebooks',
                             'test_noise_passive_feedback.ipynb')
@@ -430,7 +439,15 @@ class ElectrodeFeedbackTests(unittest.TestCase):
 
     def test_campaign_monitor_survives_feedback_off_and_full_shutdown_clears_it(self):
         hardware = _standalone_hardware()
-        hardware['TRANSPORT_FACTORY'] = hardware['MemoryTransport']
+        memory_transport = hardware['MemoryTransport']
+
+        class QualifiedMemoryTransport(memory_transport):
+            def __init__(self, base, span):
+                memory_transport.__init__(self, base, span)
+                if base == 0x40600000:  # acquisition BUILD_ID register 0x48
+                    self.m[0x48:0x4C] = (0xFE76AE09).to_bytes(4, 'little')
+
+        hardware['TRANSPORT_FACTORY'] = QualifiedMemoryTransport
         with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
             notebook = json.load(handle)
         for cell in notebook['cells']:
