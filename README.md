@@ -1,117 +1,128 @@
 # Red Pitaya feedback for a Penning-trap resonator
 
-Digital feedback system for the single-electron Penning trap, built on a Red Pitaya
-STEMlab 125-14. Custom field-programmable gate array (FPGA) logic returns a
-gain- and phase-controlled copy of the resonator signal from IN1 to a trap electrode
-through OUT1, and records the same signal at narrow bandwidth for spectral analysis.
-Jupyter notebooks running on the board control it and fit the results.
+This repository contains a digital feedback system for the single-electron Penning trap,
+built on a Red Pitaya STEMlab 125-14 board. The board reads the signal from the trap's
+resonator, feeds a copy back to a trap electrode with a chosen gain and phase, and records the
+same signal so its spectrum can be measured. Depending on the phase, the feedback either
+narrows the resonance (raising its quality factor Q) or shifts its frequency.
 
-**Status.** On the trap, feedback raises the resonator's Q or shifts its frequency,
-depending on the chosen phase. Self-excited-oscillator and proportional-integral-derivative
-control of a trapped electron have only been rehearsed against the on-chip digital
-resonator; they are not yet demonstrated on a real electron.
+**Status.** Both effects have been measured on the trap. Controlling a trapped electron
+directly — as a self-excited oscillator, or with proportional-integral-derivative control —
+has only been rehearsed against the board's built-in digital resonator, not yet on a real
+electron.
+
+## How it works
 
 ```text
-trap pickup → amplifier → IN1 ─┬─ quarter-period delay + gain/phase rotation → OUT1 → trap electrode
-                               └─ mixer → decimating filters → board memory → notebook spectrum and fit
+trap pickup -> amplifier -> IN1 -+- delay + gain/phase -> OUT1 -> high-pass filter -> trap electrode   (feedback)
+                                 |
+                                 +- mixer -> decimating filters -> board memory -> notebook             (measurement)
 ```
 
-## Repository
+- **Feedback.** Custom field-programmable gate array (FPGA) logic delays the input by a
+  quarter of a period to obtain a second, 90°-shifted copy, and adds the two in the
+  proportions set by the gain and phase. This runs continuously at 125 million samples per
+  second.
+- **Measurement.** Separately, the logic mixes the band around the resonance down to zero
+  frequency, reduces the sample rate with decimating filters, and writes the result into the
+  board's memory. Jupyter notebooks running on the board read it, compute the spectrum and
+  fit it; they also set the gain, phase and filters through the board's registers.
+
+## What is in the repository
 
 | Path | Contents |
 |---|---|
-| `fpga/` | Project-owned field-programmable gate array sources, constraints, filter coefficients, upstream pin and golden manifest. See [`fpga/README.md`](fpga/README.md). |
-| `bitstream/` | The qualified bitstream (7 August 2026, hardware identifier `FE76AE09`) and its identity record. Ready to load; no Vivado needed. |
-| `notebooks/` | The two standalone notebooks that run on the board. See [`notebooks/README.md`](notebooks/README.md). |
-| `board/check_system.py` | Health check run on the board: bitstream identity, acquisition state, memory access. It briefly writes and restores two registers, so run it with feedback off. |
-| `project.ps1` | One script for setup, tests, build, deployment, notebook copy and board check. |
-| `tools/` | Offline checks (`verify_golden.py`, `verify_rtl.py`, `verify_notebooks.py`) and the Vivado build script `vivado_build.tcl`. |
-| `tests/` | Offline tests that run the notebook cells against mock registers; no board needed. |
+| `fpga/` | The custom gateware: the field-programmable gate array sources, constraints, filter coefficients, the record of which upstream Red Pitaya design to build on, and the manifest that guards the qualified sources. See [`fpga/README.md`](fpga/README.md). |
+| `bitstream/` | The qualified bitstream (built 7 August 2026, hardware identifier `FE76AE09`) and its identity record. It can be loaded directly; Vivado is not needed. |
+| `notebooks/` | The two notebooks that run on the board. See [`notebooks/README.md`](notebooks/README.md). |
+| `board/check_system.py` | A health check that runs on the board: is the right bitstream loaded, and is the acquisition system working? It briefly writes and restores two registers, so run it with feedback off. |
+| `project.ps1` | One script for everything done from the computer: tests, building, loading the bitstream, copying the notebooks and running the health check. |
+| `tools/` | The offline checks run by `project.ps1 test`, and the Vivado build script. |
+| `tests/` | Tests that run the notebook code against simulated registers, so no board is needed. |
 
-## Set up on a new computer
+## Getting started on a new computer
 
-You need Windows PowerShell, Git, Python 3 with NumPy, SciPy and Matplotlib, and
-OpenSSH (`ssh`, `scp`). The board needs the classic Red Pitaya operating system with root
-access and its Jupyter application. Vivado is only needed to rebuild the bitstream.
+**You need:** Windows PowerShell, Git, Python 3 with NumPy, SciPy and Matplotlib, and OpenSSH
+(`ssh` and `scp`). The board needs the standard Red Pitaya operating system with root access
+and its Jupyter application. Vivado is only needed to rebuild the bitstream.
 
 ```powershell
 git clone https://github.com/Coding-AW/rp-feedback.git
 cd rp-feedback
-$env:RP_BOARD = 'root@rp-f007f7.local'   # your board's address
-.\project.ps1 test      # offline checks and tests
-.\project.ps1 deploy    # load the qualified bitstream
-.\project.ps1 check     # confirm hardware identifier FE76AE09 on the board
-.\project.ps1 sync      # copy both notebooks to /root/jupyter_notebooks
+$env:RP_BOARD = 'root@rp-f007f7.local'   # the board's address
+.\project.ps1 test      # 1. run the offline checks and tests
+.\project.ps1 deploy    # 2. load the qualified bitstream onto the board
+.\project.ps1 check     # 3. confirm the board reports FE76AE09
+.\project.ps1 sync      # 4. copy both notebooks to /root/jupyter_notebooks
 ```
 
-Then open `http://rp-f007f7.local/` in a browser, go to Development → Python
-programming (Jupyter), open `/root/jupyter_notebooks/test_noise_passive_feedback.ipynb`
-and run its cells in order. Rebooting the board restores its stock image, so run
-`deploy` again after every reboot.
+Then open `http://rp-f007f7.local/` in a browser, choose Development → Python programming to
+reach Jupyter, open `/root/jupyter_notebooks/test_noise_passive_feedback.ipynb`, and run its
+cells in order. Rebooting the board brings back its stock bitstream, so run `deploy` again after
+every reboot.
 
-Without the script, the same load is:
+Loading the bitstream by hand does the same as `deploy`:
 
 ```text
 scp bitstream/red_pitaya_top.bit root@rp-f007f7.local:/root/
 ssh root@rp-f007f7.local "cat /root/red_pitaya_top.bit > /dev/xdevcfg"
 ```
 
-## Rebuild the bitstream (optional)
+## Rebuilding the bitstream (optional)
 
-Install Vivado 2020.1 (other versions are rejected), then:
+Install Vivado 2020.1 (other versions are refused), then:
 
 ```powershell
-.\project.ps1 build              # downloads the pinned upstream on first use; 15–25 min
+.\project.ps1 build              # takes 15–25 minutes
 .\project.ps1 deploy -UseBuild   # load your build instead of the qualified copy
 ```
 
-`build` downloads RedPitaya-FPGA v0.94 at the commit and checksum in
-`fpga/upstream.lock`, lays `fpga/` over it, reruns the tests, synthesises and
-implements from scratch, and refuses the result unless timing passes and the resource
-counts match the qualified design. `deploy` refuses any bitstream whose
-`bitstream_id.txt` does not record `FE76AE09` and a timing pass.
+`build` downloads the upstream Red Pitaya v0.94 design at the exact commit recorded in
+`fpga/upstream.lock`, checks the download against its checksum, replaces the upstream files
+with the ones in `fpga/`, runs the tests, then synthesises and implements the design from
+scratch. The result is refused unless it meets timing and uses exactly the qualified design's
+resources. `deploy` refuses any bitstream whose `bitstream_id.txt` does not record `FE76AE09`
+and a timing pass.
 
-The scripted rebuild has not yet been seen to finish: its only full attempt, on
-31 August 2026, stopped right after Vivado launched. The qualified bitstream was built
-from the same sources in the earlier Vivado project layout; `tools/verify_golden.py`
-confirms the sources still match it.
+The scripted rebuild has not yet been seen to finish: its only full attempt, on 31 August 2026,
+stopped right after Vivado started. The qualified bitstream was built from the same sources in
+the project's earlier Vivado layout, and `tools/verify_golden.py` confirms the sources have not
+changed since.
 
-Notebook settings (phase, gain, bandwidth, record length, averaging) never need a
-rebuild. Any functional change under `fpga/` does, and is rejected by the golden-source
-check until the new design is re-qualified (see [`fpga/README.md`](fpga/README.md)).
+Notebook settings (phase, gain, bandwidth, record length, averaging) never need a rebuild.
+Changes to the gateware's behaviour do, and are refused until the new design has been
+re-qualified; see [`fpga/README.md`](fpga/README.md).
 
-## Checks
+## Checks and tests
 
-`.\project.ps1 test` runs, in order:
+`.\project.ps1 test` runs four checks in turn:
 
-1. `tools/verify_golden.py` — the qualified sources differ from the manifest only in
-   comments.
-2. `tools/verify_rtl.py` — every port connection in the Verilog names a port that exists.
-3. `tools/verify_notebooks.py` — every notebook call matches its function and every
-   name exists before it is used.
-4. `python -m unittest discover -s tests -t .` — the tests in `tests/`.
+1. `tools/verify_golden.py` — the qualified gateware sources match the manifest, ignoring comments.
+2. `tools/verify_rtl.py` — every module connection in the gateware names a port that exists.
+3. `tools/verify_notebooks.py` — every function call in the notebooks matches its definition,
+   and every name exists before it is used.
+4. The tests in `tests/` (`python -m unittest discover -s tests -t .`).
 
 ## Known issues
 
-- **Phase-shifter latency.** The notebooks correct commanded phases for a 3-sample
-  datapath latency (`PhaseShift.LATENCY = 3`). Register-transfer-level simulation in
-  October 2026 measured 4 samples, so commanded phases arrive about 118° late at
-  40.9 MHz. The offset is constant, and working phases are found by measurement, so
-  results within a series are consistent; absolute phase labels are not.
-- **Bypass bit not cleared on shutdown.** `full_shutdown()` and `disable_held_feedback()`
-  never touch the phase shifter's bypass register (0x40300010); only
-  `config_delay()` clears it. Bypass passes IN1 straight to OUT1.
+- **Feedback phases are offset by a constant.** The notebooks assume the phase shifter delays
+  the signal by 3 samples; simulation of the gateware in October 2026 showed 4. Every commanded
+  phase therefore arrives about 118° late at 40.9 MHz. Because working phases are found by
+  measurement, results stay consistent, but the phase values in degrees are offset.
+- **Shutdown leaves the bypass bit alone.** `full_shutdown()` and `disable_held_feedback()` do
+  not clear the phase shifter's bypass register (0x40300010), which passes IN1 straight to OUT1.
+  Only `config_delay()` clears it.
 
 ## History
 
-The development log, older notebooks and documentation are in git history; the
-cleanup removed them from the working tree. For example:
+The cleanup removed the old development log, notebooks and documents from the working tree,
+but they remain in git history. For example:
 
 ```text
-git show d0a264a:docs/development-history.md   # dated bring-up notes cited in code comments
-git show 8279c5b:notebooks/feedback_gain_phase_map.py   # archived gain–phase map
+git show d0a264a:docs/development-history.md            # the dated notes cited in code comments
+git show 8279c5b:notebooks/feedback_gain_phase_map.py   # the archived gain–phase map
 ```
 
-## License
-
-Berkeley Software Distribution (BSD) 3-Clause; see `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+The gateware builds on the Red Pitaya v0.94 design from the
+[Red Pitaya gateware repository](https://github.com/RedPitaya/RedPitaya-FPGA); the files in `fpga/`
+that come from it are modified versions.
