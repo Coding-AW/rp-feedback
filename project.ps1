@@ -120,6 +120,10 @@ function Run-Tests {
     Invoke-Native $exe ($prefix + @((Join-Path $Root 'tools\verify_notebooks.py')) + $notebooks)
     Invoke-Native $exe ($prefix + @('-m', 'unittest',
         'tests.python.test_noise_passive_feedback',
+        'tests.python.test_manual_feedback_measurement',
+        'tests.python.test_acquisition_filter_calibration',
+        'tests.python.test_feedback_gain_phase_map',
+        'tests.python.test_continuous_feedback_hold',
         'tests.python.test_manual_high_k'))
 }
 

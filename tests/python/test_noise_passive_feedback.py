@@ -48,7 +48,6 @@ def _standalone_hardware():
 _LIB = _standalone_library()
 CalibrationError = _LIB['CalibrationError']
 SetupError = _LIB['SetupError']
-analyser_configuration_fingerprint = _LIB['analyser_configuration_fingerprint']
 detect_self_oscillation = _LIB['detect_self_oscillation']
 feedback_q_setup = _LIB['feedback_q_setup']
 feedback_shift_setup = _LIB['feedback_shift_setup']
@@ -57,6 +56,9 @@ make_calibration = _LIB['make_calibration']
 paired_k = _LIB['paired_k']
 passive_iq_spectrum = _LIB['passive_iq_spectrum']
 plan_passive_acquisition = _LIB['plan_passive_acquisition']
+classify_dc_offset_sources = _LIB['classify_dc_offset_sources']
+quantized_feedback_vector = _LIB['quantized_feedback_vector']
+simulate_feedback_fixed_point = _LIB['simulate_feedback_fixed_point']
 validate_setup = _LIB['validate_setup']
 validate_topology = _LIB['validate_topology']
 
@@ -89,25 +91,87 @@ def calibration(**changes):
         evidence={'noise_floor_valid': True, 'baseline_valid': True,
                   'linearity_valid': True, 'phase_valid': True,
                   'gain_linearity_valid': True, 'drift_valid': True,
-                  'acquisition_valid': True, 'analyser_valid': True,
-                  'output_commissioning_valid': True,
+                  'acquisition_valid': True,
                   'effective_feedback_valid': True,
-                  'out1_dc_offset_valid': True,
-                  'out2_monitor_valid': True,
                   'created_epoch_s': now},
         safety={'max_k': 0.3, 'topology_digest': 'test-topology-digest',
-                'return_attenuation_db_nominal': 30.0,
-                'input_attenuation_db': 0.0,
-                'sense_capacitance_f': 2.2e-12,
-                'in1_termination_ohm': 1.0e6,
-                'analyser_impedance_ohm': 50.0,
-                'airgap_geometry_id': 'gap-test-A'},
+                'high_pass_filter_in_feedback_path': True},
         build_id='0xFE76AE09')
     values.update(changes)
     return make_calibration(**values)
 
 
 class ElectrodeFeedbackTests(unittest.TestCase):
+    def test_recommendations_explain_missing_calibration_without_resealing(self):
+        for missing in (None, {}, {'schema_version': 2}):
+            with self.assertRaisesRegex(CalibrationError, 'NO COMPLETED CALIBRATION'):
+                feedback_q_setup(missing, q_ratio=1.10)
+            with self.assertRaisesRegex(CalibrationError, 'Cell 15'):
+                feedback_shift_setup(missing, shift_linewidths=1.0)
+        valid = calibration()
+        valid['baseline']['q0'] += 1.0
+        with self.assertRaisesRegex(CalibrationError, 'changed after it was created'):
+            feedback_q_setup(valid)
+
+    def test_acquisition_calibration_is_not_a_sealing_prerequisite(self):
+        base = calibration()
+        evidence = copy.deepcopy(base['evidence'])
+        evidence.pop('acquisition_valid', None)
+        rebuilt = make_calibration(
+            base['baseline'], base['q_points'], base['shift_points'],
+            base['phases'], evidence, base['safety'], base['build_id'])
+        self.assertNotIn('acquisition_valid', rebuilt['evidence'])
+        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
+            source = handle.read()
+        self.assertNotIn('def build_calibration(', source)
+
+
+    def test_saved_json_workflows_have_been_removed(self):
+        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
+            source = handle.read()
+        for removed in ('save_feedback_resume_checkpoint', 'load_feedback_resume_checkpoint',
+                        'run_gain_phase_map', 'export_campaign', 'RESUME_BASELINE_PLAN'):
+            self.assertNotIn(removed, source)
+        self.assertIn('def measure_manual_feedback(', source)
+
+
+    def test_fixed_point_feedback_reproduces_negative_one_count_asymmetry(self):
+        import numpy as np
+        negative = simulate_feedback_fixed_point(np.array([-191]), 1, 0)
+        positive = simulate_feedback_fixed_point(np.array([-191]), -1, 0)
+        self.assertEqual(int(negative[0]), -1)
+        self.assertEqual(int(positive[0]), 0)
+
+    def test_fixed_point_noise_and_25db_pad_prediction(self):
+        import numpy as np
+        samples = np.arange(16384, dtype=float)
+        input_codes = np.rint(-191.0 + 39.0*np.sqrt(2.0)*np.sin(
+            2.0*np.pi*137.0*samples/len(samples))).astype(np.int64)
+        output_1 = simulate_feedback_fixed_point(input_codes, 1, 0)
+        output_1024 = simulate_feedback_fixed_point(input_codes, 1024, 0)
+        self.assertLess(float(np.mean(output_1)), -0.9)
+        self.assertAlmostEqual(float(np.std(output_1024)), 39.0*1024.0/16384.0,
+                               delta=0.6)
+        pad_ratio = 10.0**(-25.0/20.0)
+        output_rms_v = float(np.std(output_1024))/8192.0*pad_ratio
+        self.assertGreater(output_rms_v, 0.0)
+        self.assertLess(output_rms_v, 30e-6)
+
+    def test_quantized_vector_reports_actual_words_and_phase(self):
+        row = quantized_feedback_vector(64, 0.0, 40.9e6)
+        self.assertEqual(row['ci_word'], row['ci_signed'] & 0xFFFF)
+        self.assertEqual(row['cq_word'], row['cq_signed'] & 0xFFFF)
+        self.assertLess(abs(row['phase_error_deg']), 1.0)
+
+
+    def test_default_campaign_keeps_out2_off_and_has_no_analyser_workflow(self):
+        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
+            notebook_source = handle.read()
+        self.assertIn("out2_monitor_off()", notebook_source)
+        self.assertNotIn('OUT2_MONITOR_MODE', notebook_source)
+        self.assertNotIn('ANALYSER_FINGERPRINT', notebook_source)
+        self.assertNotIn('compare_out2_analyser_trace', notebook_source)
+
     def test_notebook_build_id_matches_fpga_header(self):
         with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
             notebook_source = json.dumps(json.load(handle))
@@ -117,7 +181,7 @@ class ElectrodeFeedbackTests(unittest.TestCase):
         self.assertIn("BUILD_ID_EXPECTED = '0xFE76AE09'", notebook_source)
         self.assertIn("32'hFE76AE09", header_source)
 
-    def test_dedicated_notebook_is_fail_closed_and_keeps_out2_as_monitor(self):
+    def test_dedicated_notebook_is_fail_closed_and_streamlined(self):
         path = os.path.join(ROOT, 'notebooks',
                             'test_noise_passive_feedback.ipynb')
         with open(path, encoding='utf-8') as handle:
@@ -126,26 +190,26 @@ class ElectrodeFeedbackTests(unittest.TestCase):
                            for cell in notebook['cells'])
         self.assertIn('# Test Noise Passive Feedback', source)
         self.assertNotIn('ELECTRODE_CHARACTERISATION_ARMED', source)
-        self.assertIn('ELECTRODE_MAX_K = 0.30', source)
-        self.assertIn('OUT1 -> 30 dB pad -> air-gap pin', source)
-        self.assertIn("in1_termination_ohm': 1.0e6", source)
-        self.assertIn('no external 50 ohm termination', source)
+        self.assertIn('OUT1 -> installed high-pass return path -> trap electrode', source)
+        self.assertIn("'high_pass_filter_in_feedback_path': True", source)
+        self.assertIn('native high-impedance mode', source)
         self.assertIn('passive_iq_spectrum', source)
-        self.assertIn("ps.monitor('input', shift=0)", source)
         self.assertIn('def full_shutdown()', source)
         self.assertIn('def disable_everything()', source)
         self.assertIn('def out2_monitor_off()', source)
-        self.assertLess(source.index('def _measure_feedback_point'),
-                        source.index('def calibrate_safe_probe_gain'))
-        self.assertEqual(source.count('def _measure_feedback_point'), 1)
-        self.assertIn('coil_voltage_directly_measured', source)
+        self.assertEqual(source.count('def measure_manual_feedback('), 1)
+        self.assertIn('def measure_acquisition_filters(', source)
+        self.assertIn('electrode_voltage_directly_measured', source)
+        self.assertNotIn('def record_out1_dc_commissioning', source)
+        self.assertNotIn('def assess_output_commissioning', source)
+        self.assertNotIn('ANALYSER_FINGERPRINT', source)
         self.assertNotIn('resonator_coil_characterisation', source)
         self.assertNotIn('from electrode_feedback', source)
         self.assertNotIn('sys.path', source)
         # The NumPy supplied on the Red Pitaya requires a numeric rcond.
         # A null value works on newer PCs but fails on the board at runtime.
         self.assertNotIn('rcond=None', source)
-        self.assertGreaterEqual(source.count('rcond=-1'), 5)
+        self.assertGreaterEqual(source.count('rcond=-1'), 2)
         self.assertTrue(notebook['metadata']['electrode_feedback']['standalone'])
         for index, cell in enumerate(notebook['cells']):
             self.assertIn('electrode_feedback_role', cell.get('metadata', {}),
@@ -221,13 +285,13 @@ class ElectrodeFeedbackTests(unittest.TestCase):
 
     def test_tampering_staleness_and_wrong_build_are_rejected(self):
         cal = calibration()
-        self.assertFalse(cal['coil_voltage_directly_measured'])
-        self.assertFalse(cal['airgap_transfer_directly_measured'])
+        self.assertFalse(cal['electrode_voltage_directly_measured'])
+        self.assertFalse(cal['feedback_path_transfer_directly_measured'])
         self.assertEqual(cal['effective_loop_status'],
                          'closed_loop_inference_only')
         setup = feedback_q_setup(cal, target_k=0.1)
-        self.assertFalse(setup['coil_voltage_directly_measured'])
-        self.assertFalse(setup['airgap_transfer_directly_measured'])
+        self.assertFalse(setup['electrode_voltage_directly_measured'])
+        self.assertFalse(setup['feedback_path_transfer_directly_measured'])
         changed = copy.deepcopy(setup); changed['resolved']['gain'] = 1.9
         with self.assertRaises(SetupError):
             validate_setup(changed, cal)
@@ -249,30 +313,22 @@ class ElectrodeFeedbackTests(unittest.TestCase):
         with self.assertRaises(SetupError):
             feedback_q_setup(rebuilt, gain=0.8)
 
-    def test_topology_rejects_wrong_airgap_or_fixed_components(self):
+    def test_topology_uses_only_campaign_relevant_facts_and_requires_high_pass(self):
         topology = {
-            'resonance_frequency_hz': 39e6,
-            'return_attenuation_db_nominal': 30.0,
-            'input_attenuation_db': 0.0,
-            'sense_capacitance_f': 2.2e-12,
-            'voltage_follower_gain_db_nominal': -1.0,
-            'zfl_model': 'ZFL-500LN+',
-            'zfl_supply_v': 12.0,
-            'in1_termination_ohm': 1.0e6,
-            'in1_termination_location': 'NONE-NATIVE-HIGH-IMPEDANCE-IN1',
-            'airgap_geometry_id': 'gap-2026-08-28-A',
-            'input_cable_id': 'input-A',
-            'feedback_cable_id': 'feedback-A',
+            'campaign_label': 'trap-path-A',
+            'resonance_frequency_hz': 40.9e6,
+            'high_pass_filter_in_feedback_path': True,
+            'input_mode': 'native-high-impedance',
         }
         self.assertIn('digest', validate_topology(topology))
         unsafe = copy.deepcopy(topology)
-        unsafe['in1_termination_ohm'] = 50.0
+        unsafe['high_pass_filter_in_feedback_path'] = False
         with self.assertRaises(CalibrationError):
             validate_topology(unsafe)
-        unsafe = copy.deepcopy(topology)
-        unsafe['return_attenuation_db_nominal'] = 15.0
-        with self.assertRaises(CalibrationError):
-            validate_topology(unsafe)
+        changed_campaign = copy.deepcopy(topology)
+        changed_campaign['campaign_label'] = 'trap-path-B'
+        self.assertNotEqual(validate_topology(topology)['digest'],
+                            validate_topology(changed_campaign)['digest'])
 
     def test_passive_fft_normalisation_and_instability_detection(self):
         import numpy as np
@@ -287,35 +343,27 @@ class ElectrodeFeedbackTests(unittest.TestCase):
                                          spectrum['psd_v2_per_hz'])
         self.assertTrue(result['unsafe'])
 
-    def test_analyser_fingerprint_and_paired_k(self):
-        analyser = {'model': 'SA', 'input_impedance_ohm': 50,
-                    'maximum_safe_input_dbm': 20, 'reference_level_dbm': 10,
-                    'attenuation_db': 10, 'preamp_state': 'off',
-                    'detector': 'RMS', 'rbw_hz': 3.5, 'vbw_hz': 3.5,
-                    'averages': 40, 'cable_id': 'A', 'cable_loss_db': 0.5}
-        first = analyser_configuration_fingerprint(analyser)
-        analyser['attenuation_db'] = 20
-        self.assertNotEqual(first, analyser_configuration_fingerprint(analyser))
+    def test_paired_k(self):
         self.assertAlmostEqual(paired_k(5000, 3000), 0.25)
 
     def test_passive_fit_recovers_39mhz_q150_over_sloping_noise(self):
         import numpy as np
-        frequency = np.linspace(37.5e6, 40.5e6, 3001)
-        linewidth = 39e6 / 150.0
-        slope = 0.15 * (frequency - 39e6) / (frequency[-1] - frequency[0])
-        peak = 4.0 / (1.0 + 4.0 * ((frequency - 39e6) / linewidth) ** 2)
+        frequency = np.linspace(39.4e6, 42.4e6, 3001)
+        linewidth = 40.9e6 / 150.0
+        slope = 0.15 * (frequency - 40.9e6) / (frequency[-1] - frequency[0])
+        peak = 4.0 / (1.0 + 4.0 * ((frequency - 40.9e6) / linewidth) ** 2)
         rng = np.random.RandomState(31)
         psd = 1.0 + slope + peak + rng.normal(scale=0.01, size=frequency.size)
         fit = fit_passive_resonator(frequency, psd)
         self.assertTrue(fit['accepted'])
-        self.assertAlmostEqual(fit['f0_hz'], 39e6, delta=3000.0)
+        self.assertAlmostEqual(fit['f0_hz'], 40.9e6, delta=3000.0)
         self.assertAlmostEqual(fit['q'], 150.0, delta=5.0)
         self.assertEqual(fit['resonator_state'], 'passive_noise')
 
     def test_acquisition_plan_adapts_from_q100_to_high_q_and_shift(self):
         discovery = plan_passive_acquisition(
-            39e6, 150, 0.0, min_decimation_log2=6,
-            bins_per_linewidth=20, linewidths_each_side=3.0)
+            40.9e6, 150, 0.0, min_decimation_log2=6,
+            bins_per_linewidth=20, linewidths_each_side=2.5)
         broad = plan_passive_acquisition(40e6, 100,
                                          linewidths_each_side=1.5)
         narrow = plan_passive_acquisition(40e6, 10000,
@@ -328,7 +376,7 @@ class ElectrodeFeedbackTests(unittest.TestCase):
         self.assertEqual(discovery['fir_expected_state'], 'bypassed')
         with self.assertRaisesRegex(CalibrationError,
                                     'qualified FPGA register range'):
-            plan_passive_acquisition(39e6, 150, min_decimation_log2=4)
+            plan_passive_acquisition(40.9e6, 150, min_decimation_log2=4)
         self.assertGreaterEqual(broad['usable_span_hz'], 3 * 400e3)
         self.assertGreaterEqual(narrow['bins_per_linewidth'], 20)
         self.assertLess(narrow['sample_rate_hz'], broad['sample_rate_hz'])
@@ -351,7 +399,7 @@ class ElectrodeFeedbackTests(unittest.TestCase):
         captured = hardware['capture'](123, 8, 32, settle=0)
         self.assertEqual(len(captured), 32)
 
-    def test_official_red_pitaya_limits_and_low_to_high_probe_order(self):
+    def test_official_red_pitaya_limits(self):
         hardware = _standalone_hardware()
         limits = hardware['RP_LIMITS']
         self.assertEqual(limits['adc_bits'], 14)
@@ -360,11 +408,6 @@ class ElectrodeFeedbackTests(unittest.TestCase):
         self.assertEqual(limits['input_lv_full_scale_vpk'], 1.0)
         self.assertEqual(limits['input_lv_absolute_max_vpk'], 6.0)
         self.assertEqual(limits['output_full_scale_vpk_into_50ohm'], 1.0)
-        counts = hardware['OUT1_INITIAL_COEFFICIENT_COUNTS']
-        self.assertEqual(counts, tuple(sorted(counts)))
-        self.assertEqual(counts[0], 1)
-        self.assertLessEqual(counts[-1] / 16384.0,
-                             hardware['OUT1_MAX_INITIAL_GAIN'])
 
     def test_bench_review_runs_without_manual_confirmations(self):
         namespace = dict(_LIB)
@@ -382,35 +425,10 @@ class ElectrodeFeedbackTests(unittest.TestCase):
         self.assertEqual(report['passive_measurement_mode'],
                          'ready_for_live_safety_tests')
         self.assertIn('topology_digest', report)
-        self.assertIn('analyser_fingerprint', report)
+        self.assertNotIn('analyser_fingerprint', report)
         self.assertGreaterEqual(plan['usable_span_hz'], 1.56e6)
         self.assertEqual(plan['decimation_log2'], 6)
 
-    def test_synthetic_phase_axes_and_live_guards(self):
-        import numpy as np
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        namespace = dict(_LIB)
-        namespace['np'] = np
-        namespace['json'] = json
-        for cell in notebook['cells']:
-            source = ''.join(cell.get('source', []))
-            if 'def calibrate_phase_axes' in source:
-                exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        phases = np.arange(0.0, 360.0, 15.0)
-        rows = [{'phase_deg': phase,
-                 'fit': {'q': 8000.0 + 400.0 * np.cos(np.deg2rad(phase - 25.0)),
-                         'f0_hz': 40e6 + 200.0 * np.cos(np.deg2rad(phase - 115.0))}}
-                for phase in phases]
-        axes = namespace['calibrate_phase_axes'](rows)
-        self.assertAlmostEqual(axes['regenerative_deg'], 25.0, delta=0.1)
-        self.assertAlmostEqual(axes['positive_shift_deg'], 115.0, delta=0.1)
-        self.assertLess(axes['orthogonality_error_deg'], 0.1)
-        source = '\n'.join(''.join(cell.get('source', []))
-                           for cell in notebook['cells'])
-        self.assertGreaterEqual(source.count('sc.peak_frac(4096)'), 4)
-        self.assertIn('run calibrate_safe_probe_gain() before the phase sweep', source)
-        self.assertIn('OUT1_OPERATING_GUARD_VPK', source)
 
     def test_shutdown_attempts_every_device_after_failure(self):
         hardware = _standalone_hardware()
@@ -477,80 +495,6 @@ class ElectrodeFeedbackTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             generator.assert_b_zero()
 
-    def test_out2_analyser_psd_conversion_and_configuration_fingerprint(self):
-        import numpy as np
-        namespace = dict(_LIB)
-        namespace.update(_standalone_hardware())
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        for cell in notebook['cells']:
-            source = ''.join(cell.get('source', []))
-            if 'def compare_out2_analyser_trace' in source:
-                exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-                break
-        analyser = {'model': 'mock-SA', 'input_impedance_ohm': 50.0,
-                    'maximum_safe_input_dbm': 20.0, 'reference_level_dbm': 10.0,
-                    'attenuation_db': 10.0, 'preamp_state': 'off', 'detector': 'RMS',
-                    'rbw_hz': 1000.0, 'vbw_hz': 1000.0, 'averages': 40,
-                    'cable_id': 'out2-A', 'cable_loss_db': 1.5}
-        namespace['ANALYSER'] = analyser
-        namespace['ANALYSER_FINGERPRINT'] = analyser_configuration_fingerprint(analyser)
-        frequency = np.linspace(38.5e6, 39.5e6, 101)
-        psd = 2e-9 * np.ones_like(frequency)
-        power_dbm = 10 * np.log10(psd * analyser['rbw_hz'] / 50.0) + 30
-        power_dbm -= analyser['cable_loss_db']
-        result = namespace['compare_out2_analyser_trace'](
-            frequency, power_dbm,
-            {'frequency_hz': frequency, 'psd_v2_per_hz': psd})
-        self.assertTrue(result['accepted'])
-        self.assertAlmostEqual(result['median_error_db'], 0.0, places=9)
-        analyser['rbw_hz'] = 2000.0
-        with self.assertRaises(RuntimeError):
-            namespace['compare_out2_analyser_trace'](
-                frequency, power_dbm,
-                {'frequency_hz': frequency, 'psd_v2_per_hz': psd})
-
-    def test_out1_dc_record_rejects_offset_and_invokes_full_shutdown(self):
-        namespace = dict(_LIB)
-        namespace.update(_standalone_hardware())
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        for cell in notebook['cells']:
-            source = ''.join(cell.get('source', []))
-            if 'def record_out1_dc_commissioning' in source:
-                exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-                break
-        good = namespace['record_out1_dc_commissioning'](
-            0.001, 0.002, 0.010, 'mock scope', 0.0001, True)
-        self.assertTrue(good['accepted'])
-        shutdowns = []
-        namespace['full_shutdown'] = lambda: shutdowns.append(True)
-        with self.assertRaises(RuntimeError):
-            namespace['record_out1_dc_commissioning'](
-                0.020, 0.020, 0.080, 'mock scope', 0.0001, True)
-        self.assertEqual(shutdowns, [True])
-
-    def test_effective_loop_acceptance_helpers(self):
-        # Load the later pure-analysis helper cell without running hardware cells.
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        namespace = {'np': __import__('numpy')}
-        for cell in notebook['cells']:
-            source = ''.join(cell.get('source', []))
-            if 'def assess_gain_linearity' in source:
-                exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        rows = [{'gain': gain, 'response': 2.0 * gain, 'accepted': True}
-                for gain in (0.0, 0.1, 0.2, 0.3)]
-        linear = namespace['assess_gain_linearity'](rows, 'response')
-        self.assertTrue(linear['accepted'])
-        commissioning = namespace['assess_output_commissioning']({
-            'dac_zero_valid': True, 'out1_scale_valid': True,
-            'spectral_purity_valid': True, 'coefficient_linearity_valid': True,
-            'phase_valid': True, 'output_noise_valid': True,
-            'clipping_absent': True, 'shutdown_valid': True})
-        self.assertTrue(commissioning['accepted'])
-        self.assertFalse(commissioning['coil_voltage_directly_measured'])
-        self.assertFalse(commissioning['airgap_transfer_directly_measured'])
 
     def test_record_health_stress_cases_and_verbose_errors(self):
         import numpy as np
@@ -593,7 +537,7 @@ class ElectrodeFeedbackTests(unittest.TestCase):
             for shift_hz in (-1e6, 0.0, 1e6):
                 try:
                     plan = plan_passive_acquisition(
-                        39e6, q_value, shift_hz,
+                        40.9e6, q_value, shift_hz,
                         min_decimation_log2=6,
                         centre_on_expected_shift=True,
                         bins_per_linewidth=20)
@@ -607,12 +551,12 @@ class ElectrodeFeedbackTests(unittest.TestCase):
                     continue
                 self.assertGreaterEqual(plan['bins_per_linewidth'], 20)
                 self.assertGreater(plan['usable_span_hz'], 0)
-                self.assertAlmostEqual(plan['centre_hz'], 39e6 + shift_hz)
+                self.assertAlmostEqual(plan['centre_hz'], 40.9e6 + shift_hz)
 
-        frequency = np.linspace(37.5e6, 40.5e6, 3001)
-        linewidth = 39e6 / 150.0
-        ideal = (1.0 + 0.12 * (frequency - 39e6) / 1.5e6 +
-                 4.0 / (1.0 + 4.0 * ((frequency - 39e6) / linewidth) ** 2))
+        frequency = np.linspace(39.4e6, 42.4e6, 3001)
+        linewidth = 40.9e6 / 150.0
+        ideal = (1.0 + 0.12 * (frequency - 40.9e6) / 1.5e6 +
+                 4.0 / (1.0 + 4.0 * ((frequency - 40.9e6) / linewidth) ** 2))
         for seed in range(20):
             rng = np.random.RandomState(seed)
             # Averaged PSD noise is positive and mildly heteroscedastic.
@@ -621,273 +565,101 @@ class ElectrodeFeedbackTests(unittest.TestCase):
             result = fit_passive_resonator(frequency, psd)
             self.assertTrue(result['accepted'], 'seed %d rejected: %r' %
                             (seed, result))
-            self.assertAlmostEqual(result['f0_hz'], 39e6, delta=12000.0)
+            self.assertAlmostEqual(result['f0_hz'], 40.9e6, delta=12000.0)
             self.assertAlmostEqual(result['q'], 150.0, delta=20.0)
 
-    def test_synthetic_linearity_compression_and_hysteresis(self):
-        import numpy as np
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        namespace = {'np': np}
-        for cell in notebook['cells']:
-            source = ''.join(cell.get('source', []))
-            if 'def assess_gain_linearity' in source:
-                exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        gains = np.linspace(0.0, 0.3, 7)
-        linear = [{'gain': float(g), 'response': float(5.0 * g)} for g in gains]
-        compressed = [{'gain': float(g),
-                       'response': float(1.0 - np.exp(-18.0 * g))}
-                      for g in gains]
-        self.assertTrue(namespace['assess_gain_linearity'](
-            linear, 'response')['accepted'])
-        self.assertFalse(namespace['assess_gain_linearity'](
-            compressed, 'response', minimum_r_squared=0.995)['accepted'])
-        down = [{'gain': row['gain'], 'response': row['response'] + 0.3}
-                for row in linear]
-        hysteresis = namespace['assess_hysteresis'](
-            linear, down, 'response', maximum_fraction_of_span=0.05)
-        self.assertFalse(hysteresis['accepted'])
 
     def test_cic_dome_is_corrected_and_limited_to_trustworthy_band(self):
         import numpy as np
         namespace = dict(_LIB)
         with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
             notebook = json.load(handle)
-        for index in (2, 4, 28):
-            source = ''.join(notebook['cells'][index].get('source', []))
+        for marker in ('TOPOLOGY = {', 'Standalone numerical dependencies loaded', 'def cic_power_response('):
+            source = next(''.join(cell['source']) for cell in notebook['cells']
+                          if cell['cell_type'] == 'code' and marker in ''.join(cell['source']))
             exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        plan = plan_passive_acquisition(39e6, 150, min_decimation_log2=6)
-        frequency = np.linspace(39e6 - 0.9e6, 39e6 + 0.9e6, 2001)
+        plan = plan_passive_acquisition(40.9e6, 150, min_decimation_log2=6)
+        frequency = np.linspace(40.9e6 - 0.9e6, 40.9e6 + 0.9e6, 2001)
         raw = namespace['cic_power_response'](frequency, plan)
         spectrum = {'frequency_hz': frequency, 'psd_v2_per_hz': raw,
                     'bin_hz': frequency[1] - frequency[0], 'averages': 40}
         corrected = namespace['correct_acquisition_response'](spectrum, plan)
-        central = np.abs(frequency - 39e6) <= 0.5e6
+        central = np.abs(frequency - 40.9e6) <= 0.5e6
         valid = central & corrected['response_correction_valid']
         self.assertGreater(np.count_nonzero(valid), 1000)
         self.assertAlmostEqual(float(np.nanmedian(corrected['psd_v2_per_hz'][valid])),
                                1.0, places=10)
         self.assertLess(raw[0], raw[len(raw)//2])
         self.assertEqual(corrected['response_source'],
-                         'modelled CIC response; FIR bypassed')
+                         'modelled exact CIC; FIR bypassed')
 
-    def test_lo_invariance_and_edge_fit_guards_reproduce_bad_run(self):
-        import numpy as np
-        namespace = dict(_LIB)
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        for index in (2, 4, 28, 34):
-            source = ''.join(notebook['cells'][index].get('source', []))
-            exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        rows_fixed = []
-        rows_moving = []
-        for lo in (38.8e6, 39.0e6, 39.2e6):
-            plan = {'centre_hz': lo}
-            rows_fixed.append({'plan': plan,
-                               'fit': {'f0_hz': 39.02e6,
-                                       'linewidth_hz': 260e3,
-                                       'accepted': True}})
-            rows_moving.append({'plan': plan,
-                                'fit': {'f0_hz': lo + 20e3,
-                                        'linewidth_hz': 260e3,
-                                        'accepted': True}})
-        self.assertTrue(namespace['assess_lo_invariance'](rows_fixed)['accepted'])
-        self.assertFalse(namespace['assess_lo_invariance'](rows_moving)['accepted'])
-
-        # Reproduce the real run: Q~150 at 39.16--39.17 MHz was physically
-        # LO-invariant but lay only ~1.3 linewidths below the upper boundary.
-        observed = []
-        for lo, f0, q in zip((38.8e6, 39.0e6, 39.2e6),
-                             (39.171858e6, 39.159565e6, 39.171974e6),
-                             (156.5, 151.6, 158.0)):
-            observed.append({'plan': {'centre_hz': lo},
-                             'fit': {'f0_hz': f0,
-                                     'linewidth_hz': f0/q,
-                                     'accepted': True}})
-        observed_invariance = namespace['assess_lo_invariance'](observed)
-        self.assertTrue(observed_invariance['accepted'])
-        self.assertLess(observed_invariance['centre_spread_linewidths'], 0.06)
-
-        frequency = np.linspace(38.5e6, 39.5e6, 2001)
-        linewidth = 260e3
-        edge_peak = 1.0 + 5.0 / (1.0 + 4.0*((frequency-39.45e6)/linewidth)**2)
-        edge = namespace['fit_one_spectrum'](
-            {'frequency_hz': frequency, 'psd_v2_per_hz': edge_peak},
-            discovery=True)
-        self.assertTrue(edge['accepted'])
-        self.assertIn('recentered fit', edge['edge_margin_warning'])
-        self.assertLess(edge['edge_margin_linewidths'], 1.5)
-
-    def test_local_refined_fit_excludes_neighbouring_resonances(self):
-        import numpy as np
-        namespace = dict(_LIB)
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        for index in (2, 4, 28, 34):
-            source = ''.join(notebook['cells'][index].get('source', []))
-            exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        rng = np.random.RandomState(812)
-        frequency = np.linspace(38.0e6, 40.1e6, 5001)
-        f0 = 39.17e6
-        linewidth = f0/150.0
-        main = 3.0e-12/(1.0 + 4.0*((frequency-f0)/linewidth)**2)
-        # Irrelevant structures resembling those in the supplied run plot.
-        neighbour_low = 4.0e-12/(1.0 + 4.0*((frequency-38.45e6)/35e3)**2)
-        neighbour_high = 5.0e-12/(1.0 + 4.0*((frequency-39.62e6)/25e3)**2)
-        psd = (1.0e-12 + main + neighbour_low + neighbour_high)
-        psd *= np.exp(rng.normal(scale=0.08, size=frequency.size))
-        fit = namespace['fit_one_spectrum'](
-            {'frequency_hz': frequency, 'psd_v2_per_hz': psd},
-            discovery=False, q_range=(75.0, 300.0),
-            fit_centre_hz=f0,
-            fit_half_width_hz=1.25*linewidth)
-        self.assertTrue(fit['accepted'], fit['rejection_reasons'])
-        self.assertLess(abs(fit['f0_hz']-f0), 0.08*linewidth)
-        self.assertLess(abs(fit['q']-150.0), 35.0)
-        self.assertEqual(namespace['REFINED_BASELINE_AVERAGES'], 120)
-        self.assertEqual(namespace['SAFE_PROBE_AVERAGES'], 120)
-
-    def test_empirical_response_calibration_uses_lo_relative_offsets(self):
-        import numpy as np
-        namespace = dict(_LIB)
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        for index in (2, 4, 28, 30):
-            source = ''.join(notebook['cells'][index].get('source', []))
-            exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        namespace['CLR_GREY'] = '0.5'
-        plan = plan_passive_acquisition(39e6, 150, min_decimation_log2=6)
-        frequency = np.r_[np.linspace(38.5e6, 39.5e6, 9), 39e6, 38.5e6, 39.5e6]
-        predicted = namespace['cic_power_response'](frequency, plan)
-        input_rms = np.full(frequency.shape, 1e-3)
-        measured_rms = input_rms * np.sqrt(predicted)
-        calibration_result = namespace['calibrate_acquisition_response'](
-            frequency, input_rms, measured_rms, plan)
-        self.assertTrue(calibration_result['accepted'])
-        shifted_plan = dict(plan); shifted_plan['centre_hz'] = 39.2e6
-        shifted_frequency = calibration_result['offset_hz'] + shifted_plan['centre_hz']
-        gain, source = namespace['acquisition_response_power'](
-            shifted_frequency, shifted_plan, calibration_result)
-        self.assertEqual(source, 'measured swept-tone response')
-        self.assertTrue(np.allclose(gain, calibration_result['power_gain']))
-
-    def test_dma_cic_scale_reconstructs_input_volts_without_false_clipping(self):
-        import numpy as np
-        namespace = dict(_LIB)
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        for index in (2, 4, 28, 30):
-            source = ''.join(notebook['cells'][index].get('source', []))
-            exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        self.assertEqual(namespace['CIC_COUNTS_PER_ADC_VPK'], float(1 << 29))
-        known_vpk = 0.0125
-        raw_peak = known_vpk * (1 << 29)
-        scale = namespace['validate_cic_voltage_scale'](raw_peak, known_vpk)
-        self.assertTrue(scale['accepted'])
-        self.assertAlmostEqual(scale['reconstructed_input_vpk'], known_vpk)
-        # The former ADC-count conversion would falsely report 819.2 V here.
-        self.assertAlmostEqual(raw_peak * namespace['CIC_VOLTS_PER_COUNT'],
-                               known_vpk)
-
-    def test_broad_peak_detector_survives_coloured_noise_and_narrow_spurs(self):
-        import numpy as np
-        namespace = dict(_LIB)
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        for index in (2, 4, 28, 34):
-            source = ''.join(notebook['cells'][index].get('source', []))
-            exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        frequency = np.linspace(38.5e6, 39.5e6, 2049)
-        linewidth = 39e6 / 150.0
-        x = (frequency - 39e6) / 1e6
-        background = np.exp(0.35*x)
-        lorentzian = 0.45 / (1.0 + 4.0*((frequency-39.04e6)/linewidth)**2)
-        for seed in range(12):
-            rng = np.random.RandomState(700 + seed)
-            psd = (background + lorentzian) * rng.gamma(
-                shape=40.0, scale=1.0/40.0, size=frequency.size)
-            # Large one-bin interference must be masked, not fitted as high Q.
-            for index in rng.choice(np.arange(50, 1999), size=8, replace=False):
-                psd[index] *= 15.0
-            result = namespace['fit_one_spectrum'](
-                {'frequency_hz': frequency, 'psd_v2_per_hz': psd},
-                discovery=True)
-            self.assertTrue(result['accepted'],
-                            'seed %d rejected: %r' % (seed, result))
-            self.assertAlmostEqual(result['f0_hz'], 39.04e6, delta=35e3)
-            self.assertAlmostEqual(result['q'], 150.0, delta=45.0)
-            self.assertGreaterEqual(result['masked_spur_bins'], 8)
-
-    def test_broad_peak_detector_rejects_noisy_background_without_resonance(self):
-        import numpy as np
-        namespace = dict(_LIB)
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        for index in (2, 4, 28, 34):
-            source = ''.join(notebook['cells'][index].get('source', []))
-            exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        frequency = np.linspace(38.5e6, 39.5e6, 2049)
-        x = (frequency - 39e6) / 1e6
-        rng = np.random.RandomState(991)
-        psd = np.exp(0.4*x) * rng.gamma(shape=40.0, scale=1.0/40.0,
-                                        size=frequency.size)
-        result = namespace['fit_one_spectrum'](
-            {'frequency_hz': frequency, 'psd_v2_per_hz': psd},
-            discovery=True)
-        self.assertFalse(result['accepted'])
-        message = ' '.join(result['rejection_reasons'])
-        self.assertTrue('ΔBIC' in message or 'integrated broad-feature SNR' in message)
-
-    def test_plan_relative_fit_tracks_high_q_feedback_state(self):
-        import numpy as np
-        namespace = dict(_LIB)
-        with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
-            notebook = json.load(handle)
-        for index in (2, 4, 28, 34):
-            source = ''.join(notebook['cells'][index].get('source', []))
-            exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
-        frequency = np.linspace(38.97e6, 39.03e6, 4097)
-        q_value = 10000.0
-        linewidth = 39e6/q_value
-        rng = np.random.RandomState(1440)
-        ideal = 1.0 + 0.8/(1.0+4.0*((frequency-39.004e6)/linewidth)**2)
-        psd = ideal*rng.gamma(shape=80.0, scale=1.0/80.0,
-                              size=frequency.size)
-        result = namespace['fit_one_spectrum'](
-            {'frequency_hz': frequency, 'psd_v2_per_hz': psd},
-            discovery=False, q_range=(2000.0, 50000.0))
-        self.assertTrue(result['accepted'], result)
-        self.assertAlmostEqual(result['f0_hz'], 39.004e6, delta=700.0)
-        self.assertAlmostEqual(result['q'], q_value, delta=2500.0)
 
     def test_negative_input_offset_is_classified_by_source_not_as_negative_rf(self):
-        import numpy as np
-        namespace = dict(_LIB)
-        namespace.update({'np': np, 'json': json})
         with open(NOTEBOOK_PATH, encoding='utf-8') as handle:
             notebook = json.load(handle)
-        exec(compile(''.join(notebook['cells'][2]['source']),
-                     NOTEBOOK_PATH, 'exec'), namespace)
-        source = ''.join(notebook['cells'][24]['source'])
-        source = source[:source.index('LIVE_INPUT_SAFETY =')]
-        exec(compile(source, NOTEBOOK_PATH, 'exec'), namespace)
         records = {
-            'in1_high_impedance_zfl_disconnected': {
-                'dc_offset_v': -0.0215, 'accepted': True},
-            'powered_detection_chain': {'dc_offset_v': -0.0230, 'accepted': True},
+            'in1_local_50ohm_reference': {
+                'dc_offset_v': -0.0215, 'dc_offset_uncertainty_v': 0.00005,
+                'accepted': True},
+            'powered_chain_safe_reference': {
+                'dc_offset_v': -0.0230, 'dc_offset_uncertainty_v': 0.00005,
+                'accepted': True},
             'complete_resonator_feedback_off': {
-                'dc_offset_v': -0.0232, 'accepted': True},
+                'dc_offset_v': -0.0232, 'dc_offset_uncertainty_v': 0.00005,
+                'accepted': True},
         }
-        report = namespace['compare_input_dc_offsets'](records)
-        self.assertTrue(report['accepted'])
-        self.assertAlmostEqual(report['adc_native_input_offset_v'], -0.0215)
-        self.assertAlmostEqual(report['powered_chain_increment_v'], -0.0015)
-        self.assertAlmostEqual(report['resonator_connection_increment_v'], -0.0002)
+        report = classify_dc_offset_sources(records)
+        self.assertTrue(report['local_offset_resolved'])
+        self.assertFalse(report['grounding_proven'])
+        self.assertFalse(report['automatic_offset_correction_authorised'])
+        self.assertAlmostEqual(report['local_reference_offset_v'], -0.0215)
+        self.assertTrue(report['comparisons']['powered_chain_increment']['resolved'])
+        self.assertFalse(report['comparisons']['resonator_increment']['resolved'])
         notebook_source = '\n'.join(''.join(c.get('source', []))
                                     for c in notebook['cells'])
-        self.assertIn('predicted_feedback_dc_bound_v', notebook_source)
-        self.assertIn('fractional-delay phase shifter passes DC', notebook_source)
+        self.assertIn('HEADROOM/DC GUARD', notebook_source)
+        self.assertIn('simulate_feedback_fixed_point', notebook_source)
+
+    def test_dc_offset_classifier_separates_amplifier_and_trap_increments(self):
+        records = {
+            'in1_local_50ohm_reference': {
+                'dc_offset_v': -0.0002, 'dc_offset_uncertainty_v': 0.00005},
+            'in1_open_high_impedance': {
+                'dc_offset_v': -0.0030, 'dc_offset_uncertainty_v': 0.00008},
+            'powered_chain_safe_reference': {
+                'dc_offset_v': -0.0210, 'dc_offset_uncertainty_v': 0.00010},
+            'complete_resonator_feedback_off': {
+                'dc_offset_v': -0.0340, 'dc_offset_uncertainty_v': 0.00012},
+        }
+        report = classify_dc_offset_sources(records)
+        self.assertFalse(report['local_offset_resolved'])
+        self.assertTrue(report['comparisons']['open_input_increment']['resolved'])
+        self.assertTrue(report['comparisons']['powered_chain_increment']['resolved'])
+        self.assertTrue(report['comparisons']['resonator_increment']['resolved'])
+        self.assertTrue(report['comparisons']['external_total_increment']['resolved'])
+
+    def test_dc_offset_classifier_does_not_overcall_noisy_small_difference(self):
+        records = {
+            'in1_local_50ohm_reference': {
+                'dc_offset_v': -0.0230, 'dc_offset_uncertainty_v': 0.0005},
+            'complete_resonator_feedback_off': {
+                'dc_offset_v': -0.0233, 'dc_offset_uncertainty_v': 0.0005},
+        }
+        report = classify_dc_offset_sources(records)
+        external = report['comparisons']['external_total_increment']
+        self.assertFalse(external['resolved'])
+        self.assertGreater(external['resolved_threshold_v'], 0.0035)
+        self.assertTrue(report['local_offset_resolved'])
+
+    def test_dc_offset_classifier_requires_local_and_complete_captures(self):
+        with self.assertRaisesRegex(CalibrationError, 'local 50 ohm'):
+            classify_dc_offset_sources({
+                'complete_resonator_feedback_off': {
+                    'dc_offset_v': -0.02,
+                    'dc_offset_uncertainty_v': 0.0001}})
 
 
 if __name__ == '__main__':
     unittest.main()
+
+# End of standalone notebook tests.
