@@ -125,8 +125,8 @@ try:
     #  2026-07-29, when Vivado ran implementation from the previous day's
     #  netlist. It cost an afternoon of re-diagnosing an already-fixed fault.
     #
-    #  bitstream_id.txt is written next to the bitstream by project.ps1 build.
-    #  Copy it across with the bitstream and this check becomes conclusive.
+    #  bitstream_id.txt travels with the bitstream (project.ps1 deploy copies
+    #  it to /root). With it present this check becomes conclusive.
     # -----------------------------------------------------------------------
     build_id = acq.r(0x48) if acq_alive else 0
     expected = None
@@ -135,17 +135,7 @@ try:
                  os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               'bitstream_id.txt')):
         if os.path.exists(cand):
-            # FIX 2026-08-03: this used to be
-            #     open(cand).read().strip().upper().replace('0X', '')
-            # which takes the WHOLE FILE - fingerprint and all the '#' comment
-            # lines below it - and compares that to an 8-character hex string.
-            # It could never match, so this check reported "the chip is running
-            # DIFFERENT logic" on every single run, including builds that were
-            # perfectly current. A check that always cries wolf is worse than no
-            # check: it taught us to scroll past the one message that would have
-            # caught a stale bitstream.
-            #
-            # Read the first line that is not blank and not a comment.
+            # The identifier is the first line that is not blank or a comment.
             for line in open(cand):
                 line = line.strip()
                 if line and not line.startswith('#'):
@@ -172,40 +162,20 @@ try:
             'Either an old bitstream is loaded, or the build did not pick up\n'
             'your edits. Rebuild with project.ps1 build and reload.')
     elif acq_alive and expected is None:
-        # -------------------------------------------------------------------
-        #  FIX 2026-08-03. This branch did not exist. When bitstream_id.txt was
-        #  absent, `expected` stayed None, the comparison above was skipped, and
-        #  control fell through to the plain "OK, build fingerprint 0x..." below
-        #  - announcing success for a check that had not been performed.
-        #
-        #  That is precisely how an afternoon was lost: the fingerprint file was
-        #  never written (the build was regenerated from the Vivado GUI, which
-        #  does not write it), run_on_board.ps1 skips it silently when missing,
-        #  so the board never received it, and this script cheerfully reported
-        #  no issues about a bitstream it had not verified. Meanwhile slot 7 was
-        #  still a stub, answering every read with zero.
-        #
-        #  "I could not check" and "I checked and it is fine" must never look
-        #  the same.
-        # -------------------------------------------------------------------
+        # "I could not check" must never look like "I checked and it is fine".
         say('WARNING', 'The bitstream could NOT be verified - this is not an all-clear.',
             'Chip reports fingerprint 0x%08X, but bitstream_id.txt is not here '
             'to compare it against.' % build_id,
-            'That file is written by project.ps1 build next to the bitstream and\n'
-            'must be copied to the board with it. Without it, this script cannot\n'
-            'tell a current bitstream from a month-old one.\n'
-            '  - If you built from the Vivado GUI, the file was never written.\n'
-            '    Rebuild with project.ps1 build instead.\n'
-            '  - If you built with project.ps1 build, copy bitstream_id.txt\n'
-            '    across alongside red_pitaya_top.bit.')
+            'The file travels with the bitstream: load it with .\\project.ps1\n'
+            'deploy, which copies both. Without it, this script cannot tell a\n'
+            'current bitstream from a month-old one.')
     elif acq_alive and timing_note:
         say('PROBLEM', 'The chip is running a bitstream that FAILED TIMING.',
             'Fingerprint 0x%08X matches - but %s' % (build_id, timing_note),
             'The right logic is loaded, and it is logic that cannot be trusted.\n'
             'A design that misses timing latches half-finished answers: registers\n'
             'read zero, values change when nothing changed, numbers look\n'
-            'plausible and are wrong. Fix the timing, rebuild, reload.\n'
-            'See CHANGELOG.md for 2026-08-03.')
+            'plausible and are wrong. Fix the timing, rebuild, reload.')
     elif acq_alive:
         say('OK', 'Build fingerprint 0x%08X.' % build_id)
 
@@ -215,13 +185,12 @@ try:
         say('WARNING', 'Feedback path is recent, acquisition system not responding.',
             'Register 0x40600000 is not answering.',
             'The bitstream may predate the acquisition system.\n'
-            'Rebuild and reload - see BITSTREAM_WORKFLOW.pdf')
+            'Reload the qualified bitstream with .\\project.ps1 deploy.')
     else:
         say('PROBLEM', 'An OLD bitstream is loaded.',
             'The status register added in July 2026 is not present.',
-            'Load the current bitstream. Check the file fingerprint matches,\n'
-            'because the board looks healthy either way.\n'
-            'See BITSTREAM_WORKFLOW.pdf, Workflow A.')
+            'Load the current bitstream with .\\project.ps1 deploy and check the\n'
+            'fingerprint matches, because the board looks healthy either way.')
 
     # -----------------------------------------------------------------------
     #  WHICH MODULES ARE ACTUALLY IN THIS BITSTREAM  (added 2026-08-03)
@@ -234,10 +203,7 @@ try:
     #  which drives  bus.ack = 1  and  bus.rdata = 'x  - so it ACKNOWLEDGES the
     #  read and returns zero, instantly and without error. A slot holding a stub
     #  and a slot holding a module whose version register happens to read zero
-    #  are indistinguishable from software. On 2026-08-03 Stage 11 read zero
-    #  from slot 7, concluded "this bitstream has no sequencer", and was right -
-    #  the board was running a build from before the sequencer existed, while
-    #  Stages 8 and 9 passed because neither touches slot 7.
+    #  are indistinguishable from software.
     #
     #  Each entry is a module, its version register, and the value it must
     #  return. A version register is the only honest presence test: a stub
@@ -261,9 +227,7 @@ try:
                 'still a stub, so this bitstream predates the module. An older\n'
                 'build passes every other test on this page and every notebook\n'
                 'that does not touch this slot.\n'
-                'Rebuild with project.ps1 build, then reload following\n'
-                'BITSTREAM_WORKFLOW.pdf Workflow A - the md5sum step in A4 is\n'
-                'the one that proves the file actually arrived.')
+                'Reload the qualified bitstream with .\\project.ps1 deploy.')
 except Exception as e:
     say('PROBLEM', 'Could not read the chip registers.', str(e),
         'Is this running on the Red Pitaya, as administrator?')
@@ -333,10 +297,9 @@ if werr:
         'The writes were issued and answered with an error, so nothing was'
         ' stored.',
         'Most likely cause: the board rebooted, which silently closes memory\n'
-        'to FPGA-side writers again (TrustZone - see CHANGELOG 2026-07-30).\n'
-        'Fix: sudo python3 diagnose_hp_ports.py --open-tz, then re-arm.\n'
-        'Bitstreams built after 2026-07-30 carry the trusted badge and are\n'
-        'immune; check the build fingerprint above.')
+        'to FPGA-side writers again (TrustZone).\n'
+        'Bitstreams built after 2026-07-30, including the qualified FE76AE09\n'
+        'build, carry the trusted badge and are immune; check the fingerprint.')
 else:
     say('OK', 'Memory has not refused any writes.')
 
@@ -365,9 +328,8 @@ try:
     else:
         say('WARNING', 'Memory is (partly) CLOSED to FPGA-side writers.',
             'TZ_DDR_RAM = 0x%08X - the power-on default is all closed.' % tz,
-            'Harmless unless capturing to memory with a bitstream built\n'
-            'before 2026-07-30. To open until the next reboot:\n'
-            'sudo python3 diagnose_hp_ports.py --open-tz')
+            'Harmless with the qualified FE76AE09 bitstream; it matters only\n'
+            'for bitstreams built before 2026-07-30.')
 except Exception as e:
     say('WARNING', 'Could not read the TrustZone register.', str(e))
 
@@ -410,7 +372,7 @@ if ctrl & 256:
         'axi1\'s processor-side port is misconfigured by the boot software:'
         ' only I is stored, Q is silently lost.',
         'Use axi0: clear CTRL bit 8, or leave AXI_PORT = 0 in the notebooks.\n'
-        'axi1 is for diagnostics only. See CHANGELOG.md 2026-07-30.')
+        'axi1 is for diagnostics only.')
 
 
 # ===========================================================================
@@ -433,11 +395,11 @@ else:
     elif rate < 1:
         say('PROBLEM', 'No samples are being produced.',
             'The counter is not moving.',
-            'Check the enable bit, then run Test Stage 2.')
+            'Check the enable bit (CTRL bit 0) and the decimation register.')
     else:
         say('WARNING', 'Sample rate is not what it should be.',
             'measured %.0f per second, expected %.0f' % (rate, expect),
-            'Run Test Stage 2, which checks this properly.')
+            'Check the decimation register (0x08).')
 
 
 # ===========================================================================

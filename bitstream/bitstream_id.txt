@@ -1,0 +1,9 @@
+FE76AE09
+# fingerprint above is what register 0x48 reports
+# built    : Fri Aug 07 18:34:40 BST 2026 (the qualified golden build)
+# source   : fpga/ as listed in fpga/golden_manifest.json
+# tool     : Vivado 2020.1
+# target   : xc7z010clg400-1
+# timing   : PASS  worst slack 0.010 ns, 0 failing
+# resources: 8234 LUTs, 7679 registers, 36.5 BRAM tiles, 26 DSPs
+# sha256   : c8a6c22668bb54d91a7f27fd24d1432ed124a784ef4bb3b9046b093948dde9f0

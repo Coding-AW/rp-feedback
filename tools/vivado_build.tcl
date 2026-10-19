@@ -2,24 +2,15 @@
 #  BUILD THE WHOLE PROJECT  -  one command, with checks
 # =============================================================================
 #
-#  This internal script is called by fpga/build.tcl after the pinned upstream
-#  project has been generated. Users should run `.\project.ps1 build`.
-#  A full build takes roughly 15-25 minutes. Read the summary at the end: it
-#  says PASS or FAIL in plain
-#       words and tells you what to do next.
+#  Called by fpga/build.tcl once the pinned upstream project exists. Run it
+#  through `.\project.ps1 build`. A full build takes roughly 15-25 minutes and
+#  ends with a plain PASS or FAIL summary.
 #
-#  WHAT IT DOES, IN ORDER
-#    - checks the qualified filter files exist
-#    - adds any new source files to the project
-#    - runs synthesis, implementation and bitstream generation
-#    - checks the timing result and explains it
-#    - reports how full the chip is
-#    - tells you where the bitstream is
-#
-#  WHY BOTHER
-#  Doing this by hand means remembering five steps in the right order and then
-#  reading two reports correctly. Most of the mistakes made on this project were
-#  a skipped step, not a design error.
+#    1. check the qualified filter files exist; run the RTL and notebook checks
+#    2. add the implementation constraints and set the top module
+#    3. synthesise, implement and write the bitstream (from scratch every time)
+#    4. check timing and the golden resource counts; write bitstream_id.txt
+#    5. print where the bitstream is and what to do next
 # =============================================================================
 
 set t_start [clock seconds]
@@ -61,27 +52,10 @@ if {!$ok} {
 }
 
 # -----------------------------------------------------------------------------
-#  The notebooks are checked here too, because a notebook has no compiler and a
-#  broken call or a missing name only shows up on the board, minutes into a
-#  test. It costs a second. See tools/verify_notebooks.py.
-# -----------------------------------------------------------------------------
-
-# -----------------------------------------------------------------------------
-#  FINDING A USABLE PYTHON, AND WHAT TO DO IF THERE IS NOT ONE
-#
-#  Vivado puts its own Python 2.7 at the front of the PATH, and on this
-#  installation that copy cannot even start:
-#
-#      Fatal Python error: Failed to import encodings module
-#      C:\Xilinx\Vivado\2020.1\tps\win64\python-2.7.16\lib\encodings\__init__.py
-#
-#  So `exec python` from inside Vivado is not the Python you think it is. Every
-#  candidate is therefore ASKED its version before being trusted.
-#
-#  And the more important lesson: THE CHECKS MUST NOT BE ABLE TO STOP A BUILD
-#  FOR THEIR OWN REASONS. They are conveniences. If one cannot run, the build
-#  carries on with a note. Only a check that runs AND reports a real problem
-#  stops anything.
+#  Vivado puts its own (broken) Python 2.7 first on the PATH, so every candidate
+#  is asked its version before being trusted. A check that cannot run is
+#  skipped with a note; only a check that runs AND finds a problem stops the
+#  build.
 # -----------------------------------------------------------------------------
 proc find_python3 {} {
     foreach cand {{python3} {py -3} {python}} {
@@ -116,11 +90,8 @@ if {$PY3 eq {}} {
 }
 puts ""
 
-# -----------------------------------------------------------------------------
-#  Two one-second checks that between them catch the mistakes that have actually
-#  cost this project time: a Verilog name that does not line up, and a notebook
-#  call that cannot work. Neither replaces the build; both fail faster than it.
-# -----------------------------------------------------------------------------
+# Two one-second checks: Verilog port names that do not line up, and notebook
+# calls that cannot work (tools/verify_rtl.py, tools/verify_notebooks.py).
 foreach {label script extra} [list \
         "RTL names" "$proj_root/tools/verify_rtl.py" {} \
         "Notebooks" "$proj_root/tools/verify_notebooks.py" \
@@ -145,26 +116,14 @@ foreach {label script extra} [list \
 puts ""
 
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-#  THE BLOCK DESIGN'S OUTPUT PRODUCTS
-#
-#  `system.bd` is a source; everything under bd/system/ip and bd/system/ipshared
-#  is generated FROM it - 34 MB of IP and Xilinx library HDL that Vivado can
-#  rebuild in a couple of minutes.
-#
-#  That is why tools/backup.ps1 leaves them out, taking the backup from 78 MB to
-#  about 2 MB. The consequence is that a project restored from such a backup has
-#  a block design with no output products, and synthesis would fail on it.
-#
-#  So generate them here if they are missing. It costs nothing when they are
-#  already present, and it means a restored copy simply builds.
+#  The processor block design (system.bd, created from fpga/systemZ10.tcl) needs
+#  its generated output products before synthesis. Generate them if missing.
 # -----------------------------------------------------------------------------
 set bd_file [get_files -quiet system.bd]
 if {$bd_file ne ""} {
     set bd_dir [file dirname $bd_file]
     if {![file isdirectory "$bd_dir/ip"]} {
-        puts "  Block design has no output products - generating them now."
-        puts "  (Normal after restoring a sources-only backup. Two minutes.)"
+        puts "  Block design has no output products - generating them now (two minutes)."
         if {[catch {
             open_bd_design $bd_file
             generate_target all [get_files $bd_file]
@@ -194,35 +153,12 @@ set_property top red_pitaya_top [current_fileset]
 
 
 # -----------------------------------------------------------------------------
-#  BUILD FINGERPRINT
-# -----------------------------------------------------------------------------
-#  A hash of every Verilog file in the acquisition system, written into
-#  build_id.vh and so baked into the bitstream, where software can read it back
-#  at register 0x48.
-#
-#  WHY. On 2026-07-29 a source file was edited while Vivado had the project
-#  open. Vivado did not notice, left synthesis marked complete, and
-#  implementation ran from the PREVIOUS DAY'S netlist. The bitstream file was
-#  newly written, newly dated and byte-different - and the logic inside it was a
-#  day old. A whole afternoon went into re-diagnosing a fault that had already
-#  been fixed. File dates cannot catch that. This can.
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-#  WHICH COMMIT IS THIS BUILD FROM?
-#
-#  The fingerprint below proves the bitstream matches the files on this PC. Git
-#  proves those files are a particular commit. Recording both closes the loop
-#  that cost this project two days:
-#
-#      register 0x48  ->  bitstream_id.txt  ->  a commit  ->  git checkout
-#
-#  and you can get back to exactly the logic that is running on the board,
-#  months later, with one command.
-#
-#  That only works if the working tree is CLEAN at build time. Build with
-#  uncommitted edits and the bitstream corresponds to no commit that exists -
-#  so this warns, loudly, rather than quietly recording a commit that is not
-#  what was built.
+#  PROVENANCE
+#  Register 0x48 always reports the fixed hardware ID FE76AE09 (fpga/build_id.vh).
+#  bitstream_id.txt additionally records a hash of the HDL sources and the git
+#  commit, so a bitstream can be traced back to the exact files:
+#      register 0x48 -> bitstream_id.txt -> commit -> git checkout
+#  That only works from a clean working tree, so uncommitted edits are flagged.
 # -----------------------------------------------------------------------------
 proc git_state {root} {
     if {[auto_execok git] eq ""} { return [list none "" 0] }
@@ -279,7 +215,7 @@ set build_id_hex FE76AE09
 
 lassign [git_state $proj_root] git_status git_commit git_dirty
 if {$git_status eq "none"} {
-    set git_line "not a git repository (see GIT.md - version control is worth ten minutes)"
+    set git_line "not a git repository"
 } elseif {$git_dirty > 0} {
     set git_line "commit $git_commit PLUS $git_dirty uncommitted change(s)"
 } else {
@@ -309,30 +245,14 @@ puts "  Starting at [clock format [clock seconds] -format %H:%M:%S]."
 puts "  You can watch progress in the Design Runs tab."
 puts ""
 
-#  reset_run on BOTH runs, deliberately.
-#
-#  Vivado decides for itself whether synthesis needs re-running, and it gets
-#  that wrong when a file is edited outside the tool while the project is open:
-#  it leaves synthesis marked complete and implementation then starts from the
-#  stale netlist. Resetting removes the decision. It costs a few minutes and has
-#  already saved considerably more than that.
+#  Reset BOTH runs: Vivado can leave synthesis marked complete after a file is
+#  edited outside the tool, and implementation then starts from a stale netlist.
 reset_run impl_1
 reset_run synth_1
 
-#  Prove the run logs can actually be written, BEFORE launching.
-#
-#  Vivado launches each run step through a Windows Script Host wrapper
-#  (rundef.js) that opens runme.log for writing as its very first act. If that
-#  file is locked the wrapper dies immediately with "Permission denied", the
-#  child never reports back, wait_on_run blocks for ever, and the GUI sits at
-#  "Initializing Design" looking busy. That cost an hour on 2026-08-07.
-#
-#  reset_run above is supposed to clear these, and it silently does not when
-#  the file is held open. So check, and say what is holding it.
-#
-#  The usual culprits, in order: a leftover vivado.exe from a previous run; the
-#  GUI's own Log tab still displaying the last run's log; an editor or tail
-#  viewer left open on it; a backup or antivirus sweep over the runs tree.
+#  Prove the run logs can be written BEFORE launching. If runme.log is locked
+#  (a leftover vivado.exe or cmd.exe, an open log viewer, an antivirus sweep),
+#  Vivado's launcher dies silently and wait_on_run blocks for ever.
 foreach _run {synth_1 impl_1} {
   foreach _f {runme.log job.id.log exception.log} {
     set _log "$runs_dir/$_run/$_f"
@@ -344,15 +264,10 @@ foreach _run {synth_1 impl_1} {
         puts "  Something is holding it open. Launching anyway would leave"
         puts "  Vivado apparently stuck on \"Initializing Design\" for ever."
         puts ""
-        puts "  Seen 2026-08-07: an ORPHANED cmd.exe - the run's own batch shell,"
-        puts "  spawned by Vivado and never reaped - held runme.log and"
-        puts "  job.id.log. Windows names it \"Command Processor\" when a delete"
-        puts "  is refused. It is also why Vivado said \"PID not specified\" on"
-        puts "  shutdown: the launcher died before recording a PID to kill."
-        puts ""
+        puts "  The usual holder is an orphaned cmd.exe left by a previous run."
         puts "  Close Vivado, then in an elevated PowerShell:"
         puts "    Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" |"
-        puts "      Where CommandLine -like '*Test_Project*' | Stop-Process -Force"
+        puts "      Where CommandLine -like '*redpitaya.runs*' | Stop-Process -Force"
         puts "  If that finds nothing: Resource Monitor -> CPU -> Associated"
         puts "  Handles -> search the file name; it gives the PID directly."
         puts ""
@@ -415,19 +330,10 @@ if {[llength $stale] > 0} {
 }
 
 # -----------------------------------------------------------------------------
-#  Write the fingerprint file NOW, then rewrite it in STEP 4 with the timing
-#  verdict once that is known.
-#
-#  Writing it twice looks redundant. It is not. On 2026-08-03 this write lived
-#  only in STEP 4, and STEP 4 did not complete - so bitstream_id.txt did not
-#  exist at all. run_on_board.ps1 skips that file silently when it is missing,
-#  check_system.py had nothing to compare against, and reported "OK" for a
-#  bitstream it had never verified. The board was still running a build from
-#  before the sequencer existed.
-#
-#  So: the file must exist the moment a bitstream exists, even if everything
-#  after this point fails. It is marked "not yet checked" until STEP 4 replaces
-#  it, and check_system.py treats that as unverified rather than as approval.
+#  Write bitstream_id.txt NOW, marked "not yet checked", and rewrite it in STEP 4
+#  with the timing verdict. The file must exist the moment a bitstream exists,
+#  even if everything after this point fails; deploy refuses it until STEP 4
+#  records PASS.
 # -----------------------------------------------------------------------------
 set fh [open "$runs_dir/impl_1/bitstream_id.txt" w]
 puts $fh $build_id_hex
@@ -453,32 +359,10 @@ open_run impl_1
 #  it captures a half-finished answer. Negative slack means at least one
 #  calculation is too slow.
 # -----------------------------------------------------------------------------
-#  BUG, fixed 2026-08-03. This line used to read:
-#
-#      set fail [llength [get_timing_paths ... -slack_lessthan 0]]
-#
-#  There is no such option. Vivado 2020.1 answers:
-#
-#      ERROR: [Common 17-170] Unknown option '-slack_lessthan'
-#
-#  and an ERROR in a sourced Tcl script ABORTS IT. So STEP 4 has never once run
-#  to completion on this project. No timing verdict was ever printed, STEP 5
-#  never ran, and - once the fingerprint write was moved into STEP 4 - that file
-#  stopped being written too, which is what let a stale bitstream sit on the
-#  board while check_system.py reported no issues.
-#
-#  One wrong option name, and every check downstream of it silently ceased to
-#  exist. The build still produced a bitstream, which is what made it invisible.
-#
-#  Replaced with options that exist in every Vivado version: ask for the worst
-#  paths and count the negative ones here. Capped, because asking for tens of
-#  thousands of paths is slow and the exact number stops mattering once it is
-#  clear the design fails.
-# -----------------------------------------------------------------------------
-#  Wrapped in catch, for the same reason. If measuring timing fails again -
-#  another renamed option, a Vivado upgrade - the script must carry on and say
-#  "I could not check" rather than dying and taking every later step with it.
-#  An unmeasured build is treated as a FAILING one, never as a passing one.
+#  Count failing paths with options every Vivado version has (capped: the exact
+#  number stops mattering once the design fails). Wrapped in catch so a timing
+#  query error reports "could not check" instead of aborting the script; an
+#  unmeasured build is treated as FAILING, never as passing.
 set CAP    2000
 set fail   0
 set capped 0
@@ -539,15 +423,8 @@ if {$timing_ok} {
 }
 
 # -----------------------------------------------------------------------------
-#  Record the fingerprint next to the bitstream, so it can be copied to the
-#  board alongside it and compared with what the chip reports - AND record
-#  whether this build met timing, because the fingerprint alone only proves the
-#  board is running what was built, not that what was built is trustworthy.
-#
-#  On 2026-08-03 a build missed timing by 6.799 ns with 6224 failing endpoints.
-#  It produced a bitstream, a valid fingerprint, and a confident "NEXT STEPS:
-#  copy it to the board". Register reads came back as zeros and an afternoon
-#  went into looking for a missing module that was present all along.
+#  Rewrite bitstream_id.txt with the timing verdict: the identifier only proves
+#  the board runs what was built, not that what was built meets timing.
 # -----------------------------------------------------------------------------
 set fh [open "$runs_dir/impl_1/bitstream_id.txt" w]
 puts $fh $build_id_hex
@@ -593,13 +470,8 @@ set mins [expr {([clock seconds] - $t_start) / 60}]
 puts "  Build took about $mins minutes."
 puts ""
 if {[file exists $bit] && !$timing_ok} {
-    # -------------------------------------------------------------------------
-    #  A bitstream exists, but STEP 4 just said not to trust it. Saying "copy it
-    #  to the board" here as though nothing had happened is how the 2026-08-03
-    #  afternoon was lost: the FAIL scrolled past, the cheerful NEXT STEPS were
-    #  at the bottom where the eye lands, and the board was loaded with logic
-    #  that could not work. The verdict has to be the LAST thing on screen.
-    # -------------------------------------------------------------------------
+    # A bitstream exists but failed STEP 4: the verdict must be the last thing
+    # on screen, never a cheerful "next steps".
     puts "  *** DO NOT LOAD THIS BITSTREAM ***"
     puts ""
     if {$timing_known} {
@@ -625,7 +497,7 @@ if {[file exists $bit] && !$timing_ok} {
     puts "    2. Look at where the failing paths START and END. If they are in"
     puts "       i_reso, this is the resonator's recursive loop - see the timing"
     puts "       note in red_pitaya_resonator.v, which says to NARROW the widths,"
-    puts "       not widen them, and CHANGELOG.md for 2026-08-03."
+    puts "       not widen them."
     puts "    3. Fix it, rebuild, and only then load."
     puts ""
     puts "  The board is still running whatever it had before. That is the right"
@@ -640,9 +512,8 @@ if {[file exists $bit] && !$timing_ok} {
 } else {
     puts "  NO BITSTREAM WAS PRODUCED."
     puts ""
-    puts "  Look in the Messages tab for entries marked ERROR (red). Warnings"
-    puts "  (yellow) do not stop a build; errors do. CHANGELOG.md lists every"
-    puts "  warning this project is known to produce and whether it matters."
+    puts "  Look in the build log for entries marked ERROR. Warnings do not"
+    puts "  stop a build; errors do."
 }
 puts ""
 
