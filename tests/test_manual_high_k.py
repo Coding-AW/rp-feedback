@@ -1,17 +1,16 @@
+"""High-K coil notebook: embedded helpers, fitting and OUT2 replay safety."""
 import ast
 import json
-import os
 import time
 import unittest
 
 import numpy as np
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-NOTEBOOK = os.path.join(ROOT, 'notebooks',
-                        'resonator_coil_manual_high_k.ipynb')
+from tests.notebook import HIGH_K
 
-with open(NOTEBOOK, encoding='utf-8') as handle:
-    NB = json.load(handle)
+NOTEBOOK = str(HIGH_K)
+NB = json.loads(HIGH_K.read_text(encoding='utf-8'))
+# Indexed by position in the notebook (markdown cells included).
 CELLS = [''.join(cell.get('source', [])) for cell in NB['cells']]
 SOURCE = '\n'.join(CELLS)
 

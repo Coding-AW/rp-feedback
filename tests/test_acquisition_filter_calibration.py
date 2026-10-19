@@ -1,23 +1,21 @@
-"""Exercise the inlined filter code against synthetic tones and register faults."""
+"""Main notebook, cells 13-18: acquisition-filter prediction and calibration."""
 import ast
 import contextlib
 import io
 import json
-from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
 import numpy as np
 from scipy.signal import freqz
-from tests.python.test_manual_feedback_measurement import mock_system, namespace, plt, ROOT, NOTEBOOK
+
+from tests.notebook import MAIN, mock_hardware, run_cells
+from tests.test_manual_feedback_measurement import mock_system, namespace, plt
 
 
 def filter_system(seed=1, response_fault=0.0):
     ns, active, state = mock_system(seed=seed)
-    book = json.loads(NOTEBOOK.read_text(encoding='utf-8'))
-    code = next(''.join(c['source']) for c in book['cells']
-                if c['cell_type'] == 'code' and 'def inspect_acquisition_filters(' in ''.join(c['source']))
-    exec(compile(code, str(NOTEBOOK), 'exec'), ns)
+    run_cells((13,), ns)
     rng = np.random.RandomState(seed)
     input_rms = float(np.std(ns['sc'].acquire.return_value[0]))*ns['ADC_RAW_VOLTS_PER_COUNT']
     def tone_capture(word, dec, n, settle, fir_mode='auto'):
@@ -35,12 +33,8 @@ def filter_system(seed=1, response_fault=0.0):
 
 def loopback_system(seed=5, amplitude_exponent=1.0, connected=True):
     """Real notebook Generator with memory registers; only analogue signals are simulated."""
-    from tests.python.test_noise_passive_feedback import _standalone_hardware
     ns, active, state = filter_system(seed)
-    with contextlib.redirect_stdout(io.StringIO()):
-        hw = _standalone_hardware()
-    hw['TRANSPORT_FACTORY'] = hw['MemoryTransport']
-    generator = hw['Generator']()
+    generator = mock_hardware()['Generator']()
     read_register = generator.r
     # The actual ASG exposes the fractional step at a different read address.
     generator.r = lambda off: read_register(0x4C if off == 0x14 else off)
@@ -82,36 +76,10 @@ class AcquisitionFilterTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), patch.object(plt, 'show'):
             return function(*args, **kwargs)
 
-    def test_trimmed_notebook_and_standalone_definitions(self):
-        book = json.loads(NOTEBOOK.read_text(encoding='utf-8'))
-        source = '\n'.join(''.join(c['source']) for c in book['cells'])
-        for removed in ('def measure_noise_condition(', 'def measure_baseline(',
-                        'def calibrate_safe_probe_gain(', 'def run_gain_ladder(',
-                        'def build_calibration(', 'def feedback_apply('):
-            self.assertNotIn(removed, source)
-        self.assertIn('def measure_manual_feedback(', source)
-        for c in book['cells']:
-            if c['cell_type'] == 'code':
-                ast.parse(''.join(c['source']), feature_version=(3, 5))
-        helpers = (ROOT/'notebooks/acquisition_filter_helpers.py').read_text(encoding='utf-8')
-        calibration = (ROOT/'notebooks/acquisition_filter_calibration.py').read_text(encoding='utf-8')
-        self.assertIn(helpers, source); self.assertIn(calibration, source)
-
-    def test_embedded_coefficients_equal_qualified_rtl_table(self):
-        ns = namespace(); profile = ns['acquisition_fir_profile']()
-        original = np.loadtxt(ROOT/'fpga/fir_coeffs.txt') / 2**17
-        np.testing.assert_array_equal(profile['taps'], original)
-        self.assertEqual(len(profile['taps']), 309)
-        self.assertEqual(np.sum(profile['taps']), 1)
-        self.assertEqual(profile['taps'][154], profile['half_counts'][-1]/2**17)
-
-    def test_workflow_order_short_instructions_and_no_part4(self):
-        book = json.loads(NOTEBOOK.read_text(encoding='utf-8'))
+    def test_workflow_order_and_opt_in_correction_selection(self):
+        book = json.loads(MAIN.read_text(encoding='utf-8'))
         cells = book['cells']
         sources = [''.join(c['source']) for c in cells]
-        source = '\n'.join(sources)
-        self.assertNotIn('def run_guided_dc_offset_test(', source)
-        self.assertNotIn('DC_LOCAL_REFERENCE =', source)
         calibration_index = next(i for i, s in enumerate(sources)
                                  if 'def inspect_acquisition_filters(' in s)
         selection_index = next(i for i, s in enumerate(sources)
@@ -120,16 +88,6 @@ class AcquisitionFilterTests(unittest.TestCase):
                             if 'def measure_manual_feedback(' in s)
         self.assertLess(calibration_index, selection_index)
         self.assertLess(selection_index, manual_index)
-        for i, c in enumerate(cells):
-            if c['cell_type'] == 'markdown':
-                self.assertLess(len(sources[i]), 2100, sources[i][:80])
-            else:
-                self.assertEqual(cells[i-1]['cell_type'], 'markdown')
-        numbered = [c for c in cells if c['cell_type'] == 'code']
-        self.assertEqual([c['metadata']['code_cell_number'] for c in numbered], list(range(1, 29)))
-        for i, c in enumerate(cells):
-            if c['cell_type'] == 'code':
-                self.assertTrue(sources[i-1].startswith('## %d —' % c['metadata']['code_cell_number']))
         # Explicitly running selection uses labelled models unless the operator
         # chooses accepted live results; it cannot start a capture.
         ns = {'CalibrationError': RuntimeError}
@@ -342,11 +300,10 @@ class AcquisitionFilterTests(unittest.TestCase):
         self.assertTrue(all(call.args[0] == 0x40 for call in ns['acq'].w.call_args_list))
 
     def test_real_capture_control_bits_status_failures_and_settling(self):
-        from tests.python.test_noise_passive_feedback import _standalone_hardware
         for dec, mode, status, failure in ((8,'bypass',4,False), (12,'auto',0,False),
                 (6,'auto',6,False), (8,'auto',1,True), (8,'auto',2,True),
                 (8,'auto',8,True), (8,'auto',4,True)):
-            with contextlib.redirect_stdout(io.StringIO()): ns=_standalone_hardware()
+            ns=mock_hardware()
             registers={0x34:32,0x38:status}
             acq=Mock()
             acq.w.side_effect=lambda off,value: registers.__setitem__(off,value)

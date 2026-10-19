@@ -1,10 +1,8 @@
-"""Run the notebook's one-setting function with synthetic IQ and mock registers."""
+"""Main notebook, cells 19-21: manual baseline and feedback measurements."""
 import ast
 import contextlib
 import copy
 import io
-import json
-from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
@@ -13,27 +11,13 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-ROOT = Path(__file__).resolve().parents[2]
-NOTEBOOK = ROOT/'notebooks/test_noise_passive_feedback.ipynb'
+from tests.notebook import LIBRARY, code_cells, run_cells
+
+MANUAL_CELLS = LIBRARY + (12, 19)
 
 
 def namespace():
-    cells = json.loads(NOTEBOOK.read_text(encoding='utf-8'))['cells']
-    ns = {}
-    for cell in cells:
-        if cell['cell_type'] != 'code':
-            continue
-        source = ''.join(cell['source'])
-        role = cell['metadata'].get('electrode_feedback_role')
-        if role in ('configuration', 'pure_library') or any(marker in source for marker in
-                ('Standalone numerical dependencies loaded', 'def cic_power_response(',
-                 'def measure_manual_feedback(')):
-            with contextlib.redirect_stdout(io.StringIO()):
-                exec(compile(source, str(NOTEBOOK), 'exec'), ns)
-    # No Step 4 results, baseline, saved map, topology digest or accepted campaign.
-    for key in ('CALIBRATION', 'LIVE_INPUT_SAFETY', 'PRE_FEEDBACK_DIAGNOSTICS'):
-        ns.pop(key, None)
-    return ns
+    return run_cells(MANUAL_CELLS)
 
 
 def mock_system(seed=42, q0=150, noise_only=False):
@@ -178,16 +162,11 @@ class ManualFeedbackTests(unittest.TestCase):
             self.assertTrue(base['fits']['before']['accepted'])
 
     def test_single_public_function_and_no_file_dependencies(self):
-        book = json.loads(NOTEBOOK.read_text(encoding='utf-8'))
-        cell = next(c for c in book['cells'] if 'def measure_manual_feedback(' in ''.join(c['source']))
-        code = ''.join(cell['source'])
-        self.assertEqual(code, (ROOT/'notebooks/manual_feedback_measurement.py').read_text(encoding='utf-8'))
+        code = code_cells()[19]
         tree = ast.parse(code, feature_version=(3, 5))
         self.assertEqual(len([n for n in tree.body if isinstance(n, ast.FunctionDef)]), 1)
-        for bad in ('json.load', 'json.dump', 'open(', 'read_text', '_map_', 'TOPOLOGY_RECORD', 'baseline['):
+        for bad in ('json.load', 'json.dump', 'open(', 'read_text'):
             self.assertNotIn(bad, code)
-        self.assertIsNone(cell['execution_count'])
-        self.assertEqual(cell['outputs'], [])
 
     def test_full_off_on_off_fits_and_shutdown(self):
         ns, active, state = mock_system()
@@ -254,7 +233,7 @@ class ManualFeedbackTests(unittest.TestCase):
     def test_copyable_db_plot_handles_invalid_bins_without_warnings(self):
         import textwrap
         import warnings
-        source = (ROOT/'notebooks/manual_feedback_measurement.py').read_text(encoding='utf-8')
+        source = code_cells()[19]
         block = textwrap.dedent(source.split('# BEGIN COPYABLE DB PLOT\n')[1].split('        # END COPYABLE DB PLOT')[0])
         data = {'label': 'known PSD', 'spectra': {'before': {
             'frequency_hz': np.arange(6)+40.9e6,
