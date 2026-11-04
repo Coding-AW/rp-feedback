@@ -2,8 +2,9 @@
 
 These are the project's own field-programmable gate array (FPGA) sources for the Red Pitaya
 STEMlab 125-14, whose chip is a Zynq `xc7z010clg400-1` sampling at 125 MHz. They are not a
-complete design on their own: `project.ps1 setup` downloads the upstream Red Pitaya v0.94 design
-at the commit pinned in `upstream.lock`, and these files replace or add to its files. Each
+complete design on their own: the build uses a checkout of the upstream Red Pitaya v0.94 design
+at the commit pinned in `upstream.lock`, and `build.tcl` copies these files over it (see the
+main README, "Rebuilding the bitstream"). Each
 module's register map is written out in full at the top of its source file.
 
 ## Files
@@ -26,9 +27,9 @@ module's register map is written out in full at the top of its source file.
 | `build_id.vh` | The fixed hardware identifier `FE76AE09`, which software reads back at 0x40600048 to confirm the right bitstream is loaded. |
 | `systemZ10.tcl` | The processor block design. |
 | `red_pitaya.xdc`, `project.xdc`, `red_pitaya_impl.xdc` | Pin assignments, timing constraints and implementation-only constraints. |
-| `upstream.lock` | Which upstream design to download: repository, commit, archive checksum, board, chip and Vivado version. |
+| `upstream.lock` | Which upstream design to build on: repository, commit (checked by `build.tcl`), board, chip and Vivado version; the archive checksum is kept as a record. |
 | `golden_manifest.json` | Fingerprints of the qualified sources, used to detect changes in behaviour. |
-| `build.tcl` | Vivado's entry point: creates the upstream project, then runs `tools/vivado_build.tcl`. |
+| `build.tcl` | Vivado's entry point: checks the upstream commit and the golden sources, copies these files over the upstream design, creates the upstream project, then runs `tools/vivado_build.tcl`. |
 
 ## Register slots
 

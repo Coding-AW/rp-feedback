@@ -36,53 +36,61 @@ trap pickup -> amplifier -> IN1 -+- delay + gain/phase -> OUT1 -> high-pass filt
 | `bitstream/` | The qualified bitstream (built 7 August 2026, hardware identifier `FE76AE09`) and its identity record. It can be loaded directly; Vivado is not needed. |
 | `notebooks/` | The two notebooks that run on the board. See [`notebooks/README.md`](notebooks/README.md). |
 | `board/check_system.py` | A health check that runs on the board: is the right bitstream loaded, and is the acquisition system working? It briefly writes and restores two registers, so run it with feedback off. |
-| `project.ps1` | One script for everything done from the computer: tests, building, loading the bitstream, copying the notebooks and running the health check. |
-| `tools/` | The offline checks run by `project.ps1 test`, and the Vivado build script. |
+| `tools/` | The offline checks (see "Checks and tests") and the Vivado build script that `fpga/build.tcl` hands over to. |
 | `tests/` | Tests that run the notebook code against simulated registers, so no board is needed. |
 
 ## Getting started on a new computer
 
-**You need:** Windows PowerShell, Git, Python 3 with NumPy, SciPy and Matplotlib, and OpenSSH
-(`ssh` and `scp`). The board needs the standard Red Pitaya operating system with root access
-and its Jupyter application. Vivado is only needed to rebuild the bitstream.
+**You need:** `ssh` and `scp` (part of Windows 10 and 11, macOS and Linux) and a web browser.
+The board needs the standard Red Pitaya operating system with root access and its Jupyter
+application. Vivado is only needed to rebuild the bitstream.
 
-```powershell
-git clone https://github.com/Coding-AW/rp-feedback.git
-cd rp-feedback
-$env:RP_BOARD = 'root@rp-f007f7.local'   # the board's address
-.\project.ps1 test      # 1. run the offline checks and tests
-.\project.ps1 deploy    # 2. load the qualified bitstream onto the board
-.\project.ps1 check     # 3. confirm the board reports FE76AE09
-.\project.ps1 sync      # 4. copy both notebooks to /root/jupyter_notebooks
+Copy the files to the board once, and a notebook again whenever it changes:
+
+```text
+scp bitstream/red_pitaya_top.bit bitstream/bitstream_id.txt root@rp-f007f7.local:/root/
+scp board/check_system.py root@rp-f007f7.local:/root/
+scp notebooks/test_noise_passive_feedback.ipynb root@rp-f007f7.local:/root/jupyter_notebooks/
+scp notebooks/resonator_coil_manual_high_k.ipynb root@rp-f007f7.local:/root/jupyter_notebooks/
+```
+
+If `/root/jupyter_notebooks` does not exist yet, create it first with
+`ssh root@rp-f007f7.local mkdir -p /root/jupyter_notebooks`.
+
+After every power-up or reboot (which brings back the stock bitstream), load the design:
+
+```text
+ssh root@rp-f007f7.local
+cat /root/red_pitaya_top.bit > /dev/xdevcfg    # load the qualified design
+python3 /root/check_system.py                   # optional health check: expect 0xFE76AE09
 ```
 
 Then open `http://rp-f007f7.local/` in a browser, choose Development → Python programming to
 reach Jupyter, open `/root/jupyter_notebooks/test_noise_passive_feedback.ipynb`, and run its
-cells in order. Rebooting the board brings back its stock bitstream, so run `deploy` again after
-every reboot.
+cells in order.
 
-Loading the bitstream by hand does the same as `deploy`:
-
-```text
-scp bitstream/red_pitaya_top.bit root@rp-f007f7.local:/root/
-ssh root@rp-f007f7.local "cat /root/red_pitaya_top.bit > /dev/xdevcfg"
-```
+The offline tests (below) all passed when the system was set up and again in November 2026.
+They check the code, not the board, so rerun them only after editing code.
 
 ## Rebuilding the bitstream (optional)
 
-Install Vivado 2020.1 (other versions are refused), then:
+You need Vivado 2020.1 (other versions are refused), Git and Python 3. From the repository folder:
 
-```powershell
-.\project.ps1 build              # takes 15–25 minutes
-.\project.ps1 deploy -UseBuild   # load your build instead of the qualified copy
+```text
+git clone https://github.com/RedPitaya/RedPitaya-FPGA.git .cache/upstream            # once
+git -C .cache/upstream checkout fc268bd47cd029c20ec8a5194f16661902f6d650             # the commit in fpga/upstream.lock
+vivado -mode batch -source fpga/build.tcl -tclargs . .cache/upstream                 # 15–25 minutes
 ```
 
-`build` downloads the upstream Red Pitaya v0.94 design at the exact commit recorded in
-`fpga/upstream.lock`, checks the download against its checksum, replaces the upstream files
-with the ones in `fpga/`, runs the tests, then synthesises and implements the design from
-scratch. The result is refused unless it meets timing and uses exactly the qualified design's
-resources. `deploy` refuses any bitstream whose `bitstream_id.txt` does not record `FE76AE09`
-and a timing pass.
+If Vivado is not on the `PATH`, use its full path, for example
+`C:\Xilinx\Vivado\2020.1\bin\vivado.bat`. `fpga/build.tcl` checks that the upstream checkout is at
+the pinned commit and that the qualified sources are unchanged apart from comments
+(`tools/verify_golden.py`), copies the files in `fpga/` over the upstream design, and builds
+from scratch. The result is refused unless it meets timing and uses exactly the qualified
+design's resources. The bitstream and its `bitstream_id.txt` are written to
+`.cache/upstream/prj/v0.94/project/redpitaya.runs/impl_1/`; copy both to `/root` on the board
+and load them as above. To return to the qualified design, copy the two files in `bitstream/`
+again.
 
 The scripted rebuild has not yet been seen to finish: its only full attempt, on 31 August 2026,
 stopped right after Vivado started. The qualified bitstream was built from the same sources in
@@ -95,13 +103,19 @@ re-qualified; see [`fpga/README.md`](fpga/README.md).
 
 ## Checks and tests
 
-`.\project.ps1 test` runs four checks in turn:
+All of these passed when the system was set up and again in November 2026. They need Python 3
+with NumPy, SciPy and Matplotlib, no board, and about 20 seconds. Run them from the repository
+folder after editing code:
 
-1. `tools/verify_golden.py` — the qualified gateware sources match the manifest, ignoring comments.
-2. `tools/verify_rtl.py` — every module connection in the gateware names a port that exists.
-3. `tools/verify_notebooks.py` — every function call in the notebooks matches its definition,
-   and every name exists before it is used.
-4. The tests in `tests/` (`python -m unittest discover -s tests -t .`).
+```text
+python tools/verify_golden.py        # qualified gateware sources match the manifest, ignoring comments
+python tools/verify_rtl.py           # every module connection names a port that exists
+python tools/verify_notebooks.py notebooks/test_noise_passive_feedback.ipynb notebooks/resonator_coil_manual_high_k.ipynb
+python -m unittest discover -s tests -t .    # the 58 notebook tests against simulated registers
+```
+
+`verify_notebooks.py` checks that every function call in the notebooks matches its definition
+and that every name exists before it is used.
 
 ## Known issues
 
