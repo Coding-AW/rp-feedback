@@ -125,8 +125,8 @@ try:
     #  2026-07-29, when Vivado ran implementation from the previous day's
     #  netlist. It cost an afternoon of re-diagnosing an already-fixed fault.
     #
-    #  bitstream_id.txt travels with the bitstream (project.ps1 deploy copies
-    #  it to /root). With it present this check becomes conclusive.
+    #  bitstream_id.txt travels with the bitstream (copy both to /root, as the
+    #  README shows). With it present this check becomes conclusive.
     # -----------------------------------------------------------------------
     build_id = acq.r(0x48) if acq_alive else 0
     expected = None
@@ -141,7 +141,7 @@ try:
                 if line and not line.startswith('#'):
                     expected = line.upper().replace('0X', '')
                     break
-            # The timing verdict, if project.ps1 build recorded one. A matching
+            # The timing verdict, if the build recorded one. A matching
             # fingerprint proves the board runs what was built; it says nothing
             # about whether what was built works.
             for line in open(cand):
@@ -152,22 +152,22 @@ try:
     if acq_alive and build_id == 0:
         say('WARNING', 'This bitstream has no build fingerprint.',
             'Register 0x48 reads zero.',
-            'It was not built by project.ps1 build - most likely by pressing\n'
+            'It was not built by fpga/build.tcl - most likely by pressing\n'
             'Generate Bitstream in Vivado, which does NOT force resynthesis.\n'
             'That can silently produce a new bitstream containing old logic.\n'
-            'Rebuild on the PC with:  .\\project.ps1 build')
+            'Rebuild on the PC with fpga/build.tcl (see the README).')
     elif acq_alive and expected is not None and '%08X' % build_id != expected:
         say('PROBLEM', 'The chip is running DIFFERENT logic from your source.',
             'Chip reports 0x%08X, bitstream_id.txt says 0x%s' % (build_id, expected),
             'Either an old bitstream is loaded, or the build did not pick up\n'
-            'your edits. Rebuild with project.ps1 build and reload.')
+            'your edits. Rebuild with fpga/build.tcl and reload.')
     elif acq_alive and expected is None:
         # "I could not check" must never look like "I checked and it is fine".
         say('WARNING', 'The bitstream could NOT be verified - this is not an all-clear.',
             'Chip reports fingerprint 0x%08X, but bitstream_id.txt is not here '
             'to compare it against.' % build_id,
-            'The file travels with the bitstream: load it with .\\project.ps1\n'
-            'deploy, which copies both. Without it, this script cannot tell a\n'
+            'The file travels with the bitstream: copy bitstream_id.txt to /root\n'
+            'with red_pitaya_top.bit. Without it, this script cannot tell a\n'
             'current bitstream from a month-old one.')
     elif acq_alive and timing_note:
         say('PROBLEM', 'The chip is running a bitstream that FAILED TIMING.',
@@ -185,11 +185,12 @@ try:
         say('WARNING', 'Feedback path is recent, acquisition system not responding.',
             'Register 0x40600000 is not answering.',
             'The bitstream may predate the acquisition system.\n'
-            'Reload the qualified bitstream with .\\project.ps1 deploy.')
+            'Reload the qualified bitstream: cat /root/red_pitaya_top.bit > /dev/xdevcfg')
     else:
         say('PROBLEM', 'An OLD bitstream is loaded.',
             'The status register added in July 2026 is not present.',
-            'Load the current bitstream with .\\project.ps1 deploy and check the\n'
+            'Load the current bitstream (cat /root/red_pitaya_top.bit > /dev/xdevcfg)\n'
+            'and check the '
             'fingerprint matches, because the board looks healthy either way.')
 
     # -----------------------------------------------------------------------
@@ -227,7 +228,7 @@ try:
                 'still a stub, so this bitstream predates the module. An older\n'
                 'build passes every other test on this page and every notebook\n'
                 'that does not touch this slot.\n'
-                'Reload the qualified bitstream with .\\project.ps1 deploy.')
+                'Reload the qualified bitstream: cat /root/red_pitaya_top.bit > /dev/xdevcfg')
 except Exception as e:
     say('PROBLEM', 'Could not read the chip registers.', str(e),
         'Is this running on the Red Pitaya, as administrator?')
@@ -252,7 +253,7 @@ try:
         say('PROBLEM', 'Acquisition registers are not holding values.',
             'Wrote 0x%08X, read back 0x%08X' % (probe, back),
             'The module may be missing from the build. Rebuild with\n'
-            'project.ps1 build and reload.')
+            'fpga/build.tcl and reload.')
 except Exception as e:
     say('PROBLEM', 'Could not talk to the acquisition system.', str(e))
 

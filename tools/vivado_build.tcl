@@ -3,7 +3,8 @@
 # =============================================================================
 #
 #  Called by fpga/build.tcl once the pinned upstream project exists. Run it
-#  through `.\project.ps1 build`. A full build takes roughly 15-25 minutes and
+#  with `vivado -mode batch -source fpga/build.tcl -tclargs . .cache/upstream`
+#  from the repository folder. A full build takes roughly 15-25 minutes and
 #  ends with a plain PASS or FAIL summary.
 #
 #    1. check the qualified filter files exist; run the RTL and notebook checks
@@ -29,8 +30,8 @@ proc banner {text} {
 banner "STEP 1 of 5   Checking the qualified filter files"
 # -----------------------------------------------------------------------------
 #  The timing-qualified coefficient and parameter files are part of the FPGA
-#  overlay. tools/verify_golden.py checks their exact functional contents
-#  before Vivado starts, so the build only needs to require their presence.
+#  overlay. fpga/build.tcl runs tools/verify_golden.py on their exact functional
+#  contents before the project is created, so here only their presence matters.
 # -----------------------------------------------------------------------------
 set rtl    "$proj_root/fpga"
 set ok 1
@@ -272,7 +273,7 @@ foreach _run {synth_1 impl_1} {
         puts "  Handles -> search the file name; it gives the PID directly."
         puts ""
         puts "  Then delete .cache\\upstream\\prj\\v0.94\\project - Vivado"
-        puts "  recreates it - and run .\\project.ps1 build again."
+        puts "  recreates it - and run the build command again."
         return
     }
   }
@@ -343,7 +344,7 @@ puts $fh "# source   : $git_line"
 puts $fh "# source_hash: $source_hash_hex (provenance only)"
 puts $fh "# tool     : Vivado [version -short]"
 puts $fh "# target   : [get_property PART [current_project]]"
-puts $fh "# timing   : NOT YET CHECKED - project.ps1 build did not reach STEP 4."
+puts $fh "# timing   : NOT YET CHECKED - the build did not reach STEP 4."
 puts $fh "#            If you are reading this in a finished build, something"
 puts $fh "#            went wrong after implementation. Do not load this."
 close $fh
@@ -506,7 +507,8 @@ if {[file exists $bit] && !$timing_ok} {
     puts "  Bitstream: $bit"
     puts ""
     puts "  NEXT STEPS"
-    puts "    1. Load it and run the health check: .\\project.ps1 deploy -UseBuild"
+    puts "    1. Copy it and bitstream_id.txt to /root on the board, load it with"
+    puts "       cat /root/red_pitaya_top.bit > /dev/xdevcfg, run check_system.py."
     puts "    2. Sync and run test_noise_passive_feedback.ipynb in order."
 } else {
     puts "  NO BITSTREAM WAS PRODUCED."
@@ -517,7 +519,7 @@ if {[file exists $bit] && !$timing_ok} {
 puts ""
 
 # A bitstream that cannot be deployed is a failed command. Print the detailed
-# summary first, then return a non-zero status to project.ps1 and CI.
+# summary first, then return a non-zero status to the caller and CI.
 if {![file exists $bit]} {
     error "Build failed: no bitstream was produced."
 }

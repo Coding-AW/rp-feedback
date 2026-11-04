@@ -1,7 +1,8 @@
 # Notebooks
 
 Both notebooks run on the Red Pitaya itself. They import nothing from this repository, so
-`.\project.ps1 sync` simply copies them to `/root/jupyter_notebooks` on the board. Every code
+copying them to `/root/jupyter_notebooks` on the board with `scp` is all the installation
+needed (see the main README). Every code
 cell sits under a heading that says what it does, whether it drives the hardware, and whether it
 is safe to run again. Any cell that can drive OUT1 is commented out: uncomment only the call you
 mean to run.
