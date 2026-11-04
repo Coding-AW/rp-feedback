@@ -36,37 +36,47 @@ trap pickup -> amplifier -> IN1 -+- delay + gain/phase -> OUT1 -> high-pass filt
 | `bitstream/` | The qualified bitstream (built 7 August 2026, hardware identifier `FE76AE09`) and its identity record. It can be loaded directly; Vivado is not needed. |
 | `notebooks/` | The two notebooks that run on the board. See [`notebooks/README.md`](notebooks/README.md). |
 | `board/check_system.py` | A health check that runs on the board: is the right bitstream loaded, and is the acquisition system working? It briefly writes and restores two registers, so run it with feedback off. |
-| `project.ps1` | One script for everything done from the computer: tests, building, loading the bitstream, copying the notebooks and running the health check. |
+| `project.ps1` | One script for everything done from the computer: `test`, `deploy` (load the bitstream and run the health check), `sync` (copy the notebooks) and `build`. |
 | `tools/` | The offline checks run by `project.ps1 test`, and the Vivado build script. |
 | `tests/` | Tests that run the notebook code against simulated registers, so no board is needed. |
 
 ## Getting started on a new computer
 
-**You need:** Windows PowerShell, Git, Python 3 with NumPy, SciPy and Matplotlib, and OpenSSH
-(`ssh` and `scp`). The board needs the standard Red Pitaya operating system with root access
-and its Jupyter application. Vivado is only needed to rebuild the bitstream.
+**You need:** `ssh` and `scp` (part of Windows 10 and 11, macOS and Linux) and a web browser.
+The board needs the standard Red Pitaya operating system with root access and its Jupyter
+application. Vivado is only needed to rebuild the bitstream.
 
-```powershell
-git clone https://github.com/Coding-AW/rp-feedback.git
-cd rp-feedback
-$env:RP_BOARD = 'root@rp-f007f7.local'   # the board's address
-.\project.ps1 test      # 1. run the offline checks and tests
-.\project.ps1 deploy    # 2. load the qualified bitstream onto the board
-.\project.ps1 check     # 3. confirm the board reports FE76AE09
-.\project.ps1 sync      # 4. copy both notebooks to /root/jupyter_notebooks
+Copy the files to the board once, and a notebook again whenever it changes:
+
+```text
+scp bitstream/red_pitaya_top.bit bitstream/bitstream_id.txt root@rp-f007f7.local:/root/
+scp board/check_system.py root@rp-f007f7.local:/root/
+scp notebooks/test_noise_passive_feedback.ipynb root@rp-f007f7.local:/root/jupyter_notebooks/
+scp notebooks/resonator_coil_manual_high_k.ipynb root@rp-f007f7.local:/root/jupyter_notebooks/
+```
+
+If `/root/jupyter_notebooks` does not exist yet, create it first with
+`ssh root@rp-f007f7.local mkdir -p /root/jupyter_notebooks`.
+
+After every power-up or reboot (which brings back the stock bitstream), load the design:
+
+```text
+ssh root@rp-f007f7.local
+cat /root/red_pitaya_top.bit > /dev/xdevcfg    # load the qualified design
+python3 /root/check_system.py                   # optional health check: expect 0xFE76AE09
 ```
 
 Then open `http://rp-f007f7.local/` in a browser, choose Development → Python programming to
 reach Jupyter, open `/root/jupyter_notebooks/test_noise_passive_feedback.ipynb`, and run its
-cells in order. Rebooting the board brings back its stock bitstream, so run `deploy` again after
-every reboot.
+cells in order.
 
-Loading the bitstream by hand does the same as `deploy`:
+The offline tests (below) all passed when the system was set up and again in November 2026.
+They check the code, not the board, so rerun them only after editing code.
 
-```text
-scp bitstream/red_pitaya_top.bit root@rp-f007f7.local:/root/
-ssh root@rp-f007f7.local "cat /root/red_pitaya_top.bit > /dev/xdevcfg"
-```
+On Windows, `project.ps1` wraps these steps (`deploy` loads the design and runs the health
+check; `sync` copies the notebooks; `test` runs the offline checks). Allow scripts once with
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. The script talks to
+`root@rp-f007f7.local` unless `$env:RP_BOARD` names another board.
 
 ## Rebuilding the bitstream (optional)
 
@@ -74,12 +84,12 @@ Install Vivado 2020.1 (other versions are refused), then:
 
 ```powershell
 .\project.ps1 build              # takes 15–25 minutes
-.\project.ps1 deploy -UseBuild   # load your build instead of the qualified copy
+.\project.ps1 deploy -UseBuild   # load your build instead of the qualified copy, then check it
 ```
 
-`build` downloads the upstream Red Pitaya v0.94 design at the exact commit recorded in
+`build` runs the tests, then downloads the upstream Red Pitaya v0.94 design at the exact commit recorded in
 `fpga/upstream.lock`, checks the download against its checksum, replaces the upstream files
-with the ones in `fpga/`, runs the tests, then synthesises and implements the design from
+with the ones in `fpga/`, then synthesises and implements the design from
 scratch. The result is refused unless it meets timing and uses exactly the qualified design's
 resources. `deploy` refuses any bitstream whose `bitstream_id.txt` does not record `FE76AE09`
 and a timing pass.

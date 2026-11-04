@@ -271,8 +271,8 @@ foreach _run {synth_1 impl_1} {
         puts "  If that finds nothing: Resource Monitor -> CPU -> Associated"
         puts "  Handles -> search the file name; it gives the PID directly."
         puts ""
-        puts "  Then run .\\project.ps1 clean - Vivado"
-        puts "  recreates it - and re-source this script."
+        puts "  Then delete .cache\\upstream\\prj\\v0.94\\project - Vivado"
+        puts "  recreates it - and run .\\project.ps1 build again."
         return
     }
   }
@@ -506,9 +506,8 @@ if {[file exists $bit] && !$timing_ok} {
     puts "  Bitstream: $bit"
     puts ""
     puts "  NEXT STEPS"
-    puts "    1. Copy it to the board: .\\project.ps1 deploy"
-    puts "    2. Check the right one loaded: .\\project.ps1 check"
-    puts "    3. Sync and run test_noise_passive_feedback.ipynb in order."
+    puts "    1. Load it and run the health check: .\\project.ps1 deploy -UseBuild"
+    puts "    2. Sync and run test_noise_passive_feedback.ipynb in order."
 } else {
     puts "  NO BITSTREAM WAS PRODUCED."
     puts ""

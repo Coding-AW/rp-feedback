@@ -2,7 +2,7 @@
 
 These are the project's own field-programmable gate array (FPGA) sources for the Red Pitaya
 STEMlab 125-14, whose chip is a Zynq `xc7z010clg400-1` sampling at 125 MHz. They are not a
-complete design on their own: `project.ps1 setup` downloads the upstream Red Pitaya v0.94 design
+complete design on their own: `project.ps1 build` downloads the upstream Red Pitaya v0.94 design
 at the commit pinned in `upstream.lock`, and these files replace or add to its files. Each
 module's register map is written out in full at the top of its source file.
 

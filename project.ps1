@@ -1,28 +1,26 @@
 <#
 .SYNOPSIS
-    Set up, check, build and deploy the Red Pitaya feedback system.
+    Test, load and rebuild the Red Pitaya feedback system from this computer.
 
 .DESCRIPTION
-    setup   download the pinned RedPitaya-FPGA v0.94 source and lay fpga/ over it
-    test    golden-source, RTL-name and notebook checks, then the offline tests
-    build   setup + test, then synthesise and implement with Vivado 2020.1
-    deploy  copy a bitstream and its bitstream_id.txt to the board and load it
-            (the qualified bitstream/ copy by default; -UseBuild for your own build)
-    check   run board/check_system.py on the board
+    test    offline checks of the gateware sources and both notebooks (no board needed)
+    deploy  load the qualified bitstream onto the board, then run the board health check
+            (-UseBuild loads your own build instead of the qualified copy)
     sync    copy both notebooks to /root/jupyter_notebooks on the board
-    clean   remove the generated Vivado project (the upstream cache stays)
+    build   rebuild the bitstream with Vivado 2020.1 (15-25 minutes)
+
+    The board is root@rp-f007f7.local unless -Board or $env:RP_BOARD names another.
 
 .EXAMPLE
-    $env:RP_BOARD = 'rp-f007f7.local'
     .\project.ps1 deploy
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('setup', 'test', 'build', 'deploy', 'sync', 'check', 'clean')]
+    [ValidateSet('test', 'deploy', 'sync', 'build')]
     [string]$Command = 'test',
 
-    [string]$Board = $(if ($env:RP_BOARD) { $env:RP_BOARD } else { '<board-hostname>' }),
+    [string]$Board = $(if ($env:RP_BOARD) { $env:RP_BOARD } else { 'root@rp-f007f7.local' }),
 
     [switch]$UseBuild
 )
@@ -58,10 +56,6 @@ function Invoke-Python([string[]]$Arguments) {
     else { Invoke-Native (Get-Command python -ErrorAction Stop).Source $Arguments }
 }
 
-function Assert-Board {
-    if ($Board -eq '<board-hostname>') { throw "Specify -Board <hostname> or set RP_BOARD before '$Command'." }
-}
-
 function Copy-Overlay {
     # Project-owned files replace their upstream counterparts.
     $classic = Join-Path $Upstream 'rtl\classic'
@@ -83,7 +77,6 @@ function Copy-Overlay {
 }
 
 function Setup-Upstream {
-    Invoke-Python @((Join-Path $Root 'tools\verify_golden.py'))
     $lock = Read-Lock
     foreach ($key in 'repository', 'commit', 'project', 'model', 'part', 'vivado', 'archive_sha256') {
         if (-not $lock[$key]) { throw "Missing '$key' in fpga/upstream.lock" }
@@ -157,11 +150,10 @@ function Get-DeployImage {
 }
 
 switch ($Command) {
-    'setup' { Setup-Upstream }
     'test' { Run-Tests }
     'build' {
-        Setup-Upstream
         Run-Tests
+        Setup-Upstream
         $vivado = Get-Command vivado.bat -ErrorAction SilentlyContinue
         if (-not $vivado) { $vivado = Get-Command vivado -ErrorAction SilentlyContinue }
         $vivadoPath = if ($vivado) { $vivado.Source } else { 'C:\Xilinx\Vivado\2020.1\bin\vivado.bat' }
@@ -171,27 +163,16 @@ switch ($Command) {
         Invoke-Native $vivadoPath @('-mode', 'batch', '-source', (Join-Path $Root 'fpga\build.tcl'), '-tclargs', $Root, $Upstream)
     }
     'deploy' {
-        Assert-Board
+        # One copy and one command: load the bitstream, then run the health check
+        # (it reads the identifier and briefly writes and restores two registers).
         $bit, $id = Get-DeployImage
         Invoke-Native 'scp' @($bit, $id, (Join-Path $Root 'board\check_system.py'), "${Board}:/root/")
-        Invoke-Native 'ssh' @($Board, 'cat /root/red_pitaya_top.bit > /dev/xdevcfg')
-        Write-Host "Loaded $bit on $Board."
+        Invoke-Native 'ssh' @($Board, 'cat /root/red_pitaya_top.bit > /dev/xdevcfg && python3 /root/check_system.py')
     }
     'sync' {
-        Assert-Board
         $remote = '/root/jupyter_notebooks'
         Invoke-Native 'ssh' @($Board, "mkdir -p $remote")
         Invoke-Native 'scp' ($Notebooks + @("${Board}:${remote}/"))
         Write-Host "Copied the two notebooks to ${Board}:${remote}."
-    }
-    'check' {
-        Assert-Board
-        Invoke-Native 'scp' @((Join-Path $Root 'board\check_system.py'), "${Board}:/root/check_system.py")
-        Invoke-Native 'ssh' @($Board, 'sudo python3 /root/check_system.py')
-    }
-    'clean' {
-        $project = Join-Path $Upstream 'prj\v0.94\project'
-        if (Test-Path $project) { Remove-Item -LiteralPath $project -Recurse -Force }
-        Write-Host 'Removed the generated Vivado project; the upstream cache remains available offline.'
     }
 }
