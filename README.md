@@ -134,7 +134,7 @@ but they remain in git history. For example:
 
 ```text
 git show d0a264a:docs/development-history.md            # the dated notes cited in code comments
-git show 8279c5b:notebooks/feedback_gain_phase_map.py   # the archived gain–phase map
+git show 606f76f:notebooks/feedback_gain_phase_map.py   # the archived gain–phase map
 ```
 
 The gateware builds on the Red Pitaya v0.94 design from the
