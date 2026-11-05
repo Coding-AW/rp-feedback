@@ -75,4 +75,4 @@ resource counts above are reproduced exactly. To change the design on purpose, r
 with simulation, timing and hardware tests, then replace the manifest.
 
 Some comments cite dated entries (for example 2026-07-30) from the development log, which is
-kept in git history: `git show d0a264a:docs/development-history.md`.
+kept in git history: `git show 6b42fbc:docs/development-history.md`.
